@@ -122,23 +122,24 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderIsExpanded(path, model) {
     const key = albumHeaderPath(path);
     const map = this.albumHeaderExpandedMap();
-    const currentModel = model || this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
-    const problems = albumHeaderFoldProblems(currentModel);
     const stored = key ? map.get(key) : null;
-    const choice = propertyCardFoldRestamp(stored, problems);
-    if (key && choice !== stored && choice) map.set(key, choice);
+    const choice = typeof propertyCardFoldChoiceFromStored === "function"
+      ? propertyCardFoldChoiceFromStored(stored)
+      : (stored && typeof stored === "object" && typeof stored.open === "boolean" ? stored : null);
+    const restamped = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(choice, "")
+      : choice;
+    if (key && restamped && restamped !== stored) map.set(key, restamped);
     return propertyCardFoldResolve({
-      choice,
-      problems,
-      foldDefault: propertyCardCabinetDefaultOpen("schema", { problems }),
+      choice: restamped || choice,
+      problems: "",
+      foldDefault: propertyCardCabinetDefaultOpen("schema", { species: "album" }),
     });
   }
 
   albumHeaderSetExpanded(path, expanded, problems) {
     const key = albumHeaderPath(path);
-    const currentModel = this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
-    const signature = typeof problems === "string" ? problems : albumHeaderFoldProblems(currentModel);
-    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded, signature));
+    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded === true, ""));
     this.refreshAlbumHeaderReading();
     this.refreshAlbumHeaderEditors();
   }

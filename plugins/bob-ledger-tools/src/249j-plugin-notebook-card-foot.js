@@ -129,6 +129,7 @@ class BobLedgerToolsNotebookCardFootMixin {
   notebookCardFootHandlers(path) {
     const filePath = notebookCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "notebook",
       pendingScroll: this.notebookCardFootPendingScroll,
       refresh: () => this.scheduleNotebookCardRefresh?.(),
       hoverSource: "bob-notebook-card",
@@ -139,7 +140,7 @@ class BobLedgerToolsNotebookCardFootMixin {
   }
 
   notebookCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.notebookCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.notebookCardFootTracked, "notebook");
   }
 
   notebookCardCopyRoute(route) {
@@ -161,6 +162,7 @@ class BobLedgerToolsNotebookCardFootMixin {
     const built = propertyCardFootAdapterAppend(
       card, filePath, doc, options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.notebookCardFootHandlers(filePath), this.notebookCardFootPendingScroll,
+      { species: "notebook" },
     );
     if (!built?.element || !model?.route) return built;
     const route = notebookCardDomEl(doc, "button", "bob-notebook-card-route");

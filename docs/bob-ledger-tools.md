@@ -18,7 +18,7 @@ Cards: [Album cards](albums.md), [Record Card](record-card.md),
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.174.2 |
+| Version | 1.175.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -118,8 +118,7 @@ charge (older output said `charged <row date>`); a focus ring appears, and
 plugin-off still shows 🔁.
 
 The **bank card** owns `bank.md`'s top (`[🏦] BANK · Cash` kicker, `Bank` title,
-`summary` subtitle) and hides `# 🏦 Bank`. Healthy Setup stays closed;
-attention opens it. `_` toggles the Setup [cabinet](cabinets.md). Expanded foot shows `parent`,
+`summary` subtitle) and hides `# 🏦 Bank`. Setup stays closed; attention shows in the closed header. `_` toggles the Setup [cabinet](cabinets.md). Expanded foot shows `parent`,
 `summary`, `bank`, and `created`; fences, categories, and modals have none.
 **⊞ Setup**, **Edit bank setup**, Vim `=`, and Command Mode open the editor;
 `↗ YAML` handles invalid, missing, unsupported, or mobile states. It uses the

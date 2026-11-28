@@ -94,7 +94,7 @@ Typed Area and Project notes use a related local title card. See
 authored properties, and mount rules.
 
 When bob's report arrives, `＋ <noun>` and the **Schema** and **Records**
-[cabinets](cabinets.md) join the card. Records starts open over a closed
+[cabinets](cabinets.md) join the card. Records starts closed beside a closed
 Schema; a stored `[!records]` index stays in the note and shows in Source
 mode and every fail-open context. In Live Preview Vim normal mode, `_`
 toggles the only extra cabinet, or arms the numbered pick when both show;
@@ -107,8 +107,8 @@ display-only, and records show the matching group row on their walk rail. The Sc
 suffixes, required as a quiet `*`, choice chips with usage counts, grouping
 annotations, and muted `legacy` chips. The toggle state lives in view state
 keyed by the album for the session, never in frontmatter. An invalid schema
-opens itself with the first diagnostic on the summary and the lint list;
-an empty schema opens itself and teaches how to add fields so
+stays closed with the first diagnostic on the summary and the lint list;
+an empty schema stays closed and teaches how to add fields so
 `Name @stem/` can collect facts. The two states never impersonate each other.
 
 `parent` lives in the kicker and `type` is implicit identity. `emoji` is the

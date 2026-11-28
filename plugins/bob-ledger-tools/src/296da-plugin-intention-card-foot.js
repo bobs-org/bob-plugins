@@ -81,9 +81,11 @@ class BobLedgerToolsIntentionCardFootMixin {
     return JSON.stringify([model?.signature || "", extra?.footDigest || "", extra?.footOpen === true]);
   }
 
-  intentionCardFootHandlers(path) {
+  intentionCardFootHandlers(path, model) {
     const key = intentionCardFilePath(path);
+    const species = (model && (model.kind || model.species)) || "";
     return propertyCardFootAdapterHandlers(this, key, {
+      species,
       pendingScroll: this.intentionCardFootPendingScroll,
       refresh: () => this.intentionCardHost?.().scheduleRefresh?.(),
       hoverSource: "bob-intention-card",
@@ -93,15 +95,18 @@ class BobLedgerToolsIntentionCardFootMixin {
     });
   }
 
-  intentionCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.intentionCardFootTracked);
+  intentionCardTrackFoot(container, path, card, model) {
+    const species = (model && (model.kind || model.species)) || "";
+    return propertyCardFootAdapterTrack(container, path, card, this.intentionCardFootTracked, species || undefined);
   }
 
   intentionCardAppendFoot(card, model, doc) {
     const path = intentionCardFilePath(model?.path);
     const spec = model?.footSpec || this.intentionCardFootSpec(path, model);
+    const species = (model && (model.kind || model.species)) || spec?.species || spec?.kind || "";
     return propertyCardFootAdapterAppend(
-      card, path, doc, spec, this.intentionCardFootHandlers(path), this.intentionCardFootPendingScroll,
+      card, path, doc, spec, this.intentionCardFootHandlers(path, model), this.intentionCardFootPendingScroll,
+      { species: species || undefined },
     );
   }
 }

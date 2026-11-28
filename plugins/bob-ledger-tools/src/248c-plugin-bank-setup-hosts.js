@@ -183,44 +183,27 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupIsExpanded(sourcePath, model) {
     const key = bankSetupHubPath(sourcePath);
     const map = this.bankSetupExpandedMap();
-    let probe = model;
-    try {
-      if (!probe) {
-        const entry = this.bankSetupEntry();
-        probe = bankSetupModel(entry.report, {
-          error: entry.error,
-          stale: entry.stale,
-          refreshing: entry.refreshing,
-          desktop: this.bankSetupDesktop(),
-          expanded: false,
-          lastGoodAt: this.bankSetupLastGoodAt,
-          lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
-        });
-      }
-    } catch (_) {
-      probe = model || null;
-    }
-    const problems = probe && typeof probe.problems === "string"
-      ? probe.problems
-      : bankSetupFoldProblems(probe || { state: "valid", findings: [] });
     let stored = key ? map.get(key) : null;
     if (typeof stored === "boolean") {
       stored = { open: stored === true, problems: "" };
+    } else if (stored && typeof stored === "object" && typeof propertyCardFoldChoiceFromStored === "function") {
+      const normalized = propertyCardFoldChoiceFromStored(stored);
+      if (normalized) stored = normalized;
     }
     const restamped = typeof propertyCardFoldRestamp === "function"
-      ? propertyCardFoldRestamp(stored, problems)
+      ? propertyCardFoldRestamp(stored, "")
       : stored;
     if (key && restamped !== stored && restamped) {
       map.set(key, restamped);
     }
     let foldDefault = false;
     try {
-      foldDefault = propertyCardSpecies?.("bank")?.foldDefault === true;
+      foldDefault = propertyCardCabinetDefaultOpen("setup", { species: "bank" }) === true;
     } catch (_) {
       foldDefault = false;
     }
     return typeof propertyCardFoldResolve === "function"
-      ? propertyCardFoldResolve({ choice: restamped, problems, foldDefault })
+      ? propertyCardFoldResolve({ choice: restamped, problems: "", foldDefault })
       : Boolean(restamped && restamped.open);
   }
 
@@ -229,17 +212,9 @@ class BobLedgerToolsBankSetupMixin {
     if (!key) {
       return;
     }
-    let signature = problems;
-    if (typeof signature !== "string") {
-      try {
-        signature = this.bankSetupModelFor(sourcePath)?.problems || "";
-      } catch (_) {
-        signature = "";
-      }
-    }
     const choice = typeof propertyCardFoldChoice === "function"
-      ? propertyCardFoldChoice(expanded === true, signature || "")
-      : { open: expanded === true, problems: signature || "" };
+      ? propertyCardFoldChoice(expanded === true, "")
+      : { open: expanded === true, problems: "" };
     this.bankSetupExpandedMap().set(key, choice);
     this.refreshBankSetupReading();
     this.refreshBankSetupEditors();

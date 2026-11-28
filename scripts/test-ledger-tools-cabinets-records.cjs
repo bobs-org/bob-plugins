@@ -369,7 +369,7 @@ test("stand-down skips cabinet bodies and absorbed callouts only", () => {
   resetCabinets();
 });
 
-test("assembled album cards mount Records open beside closed Schema with bottom-up numbers", async () => {
+test("assembled album cards mount Records closed beside closed Schema with bottom-up numbers", async () => {
   resetCabinets();
   const plugin = fakePlugin();
   registerRecords(plugin);
@@ -410,7 +410,7 @@ test("assembled album cards mount Records open beside closed Schema with bottom-
   );
   const rows = H.propertyCardCabinetsInView(view);
   assert.deepEqual(rows.extras.map(({ kind, number }) => [kind, number]), [["records", 2], ["schema", 1]]);
-  assert.equal(rows.extras[0].open, true);
+  assert.equal(rows.extras[0].open, false);
   assert.equal(rows.extras[1].open, false);
   assert.equal(rows.properties.open, false);
   const summary = panels[0].querySelector(".bob-cabinet-summary");

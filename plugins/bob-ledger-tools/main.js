@@ -67457,7 +67457,7 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
   if (!provider) return null;
   const summary = applied.summary === null || applied.summary === undefined ? "" : String(applied.summary);
   const problems = typeof applied.problems === "string" ? applied.problems : "";
-  const open = propertyCardCabinetIsOpen(path, kind, { problems });
+  const open = propertyCardCabinetIsOpen(path, kind, { problems, species });
   const bodyId = propertyCardFoldNextId();
   const panel = propertyCardCabinetCreateEl(doc, "section", `bob-cabinet-panel bob-cabinet-panel-${kind}`);
   if (!panel) return null;
@@ -67481,9 +67481,9 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
     open, keyLive: context?.keyLive === true || context?.spec?.keyLive === true, restKey: "_",
     tooltip: `Toggle ${PROPERTY_CARD_CABINET_KINDS[kind]?.noun || kind} cabinet (_)`,
     onToggle: (next) => {
-      const previous = propertyCardCabinetIsOpen(path, kind, { problems });
+      const previous = propertyCardCabinetIsOpen(path, kind, { problems, species });
       if (previous === next) return;
-      propertyCardCabinetSetOpen(path, kind, next, { problems });
+      propertyCardCabinetSetOpen(path, kind, next, { problems, species });
       const bodyState = propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, next);
       try {
         if (next && !bodyState?.wasOpen) provider.onOpen?.({ path, view: context?.view || null });
@@ -92677,17 +92677,17 @@ const PROPERTY_CARD_KINDS = Object.freeze([
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
-  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true }),
+  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
   record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true }),
   day: Object.freeze({ kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true }),
   week: Object.freeze({ kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true }),
   quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
   year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
-  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
+  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
   area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
   project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
   notebook: Object.freeze({ kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true }),
-  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false }),
+  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false }),
   ref: Object.freeze({ kind: "ref", word: "Ref", tile: "ribbon", icon: "bookmark", band: "", temporal: false, foldDefault: true }),
 });
 
@@ -95747,34 +95747,70 @@ const propertyCardFootPathResolvers = [];
 let propertyCardFootMountSeq = 0;
 let propertyCardFootEditorHook = null;
 
-function propertyCardFootIsOpen(path) {
+function propertyCardFootSpeciesOf(value, fallback) {
+  try {
+    if (typeof value === "string" && value) return value;
+    if (value && typeof value === "object" && typeof value.species === "string" && value.species) {
+      return value.species;
+    }
+  } catch (_) {}
+  try {
+    if (typeof fallback === "string" && fallback) return fallback;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootConfiguredOpen(species, options) {
+  try {
+    if (typeof propertyCardCabinetConfiguredOpen === "function") {
+      return propertyCardCabinetConfiguredOpen(species, "properties", options || {}) === true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardFootIsOpen(path, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
-  return propertyCardFootOpenStates.get(key) === true;
+  const effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+  const loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  if (propertyCardFootOpenStates.has(key)) {
+    return propertyCardFootOpenStates.get(key) === true;
+  }
+  return propertyCardFootConfiguredOpen(effectiveSpecies, loaderOptions);
 }
 
 // Flip open state for one path and notify adapter listeners so the affected
 // mounts repaint. Returns the new open state.
-function propertyCardFootToggle(path) {
+function propertyCardFootToggle(path, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
-  const next = propertyCardFootOpenStates.get(key) !== true;
-  if (next) propertyCardFootOpenStates.set(key, true);
-  else propertyCardFootOpenStates.delete(key);
+  const effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+  const loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  const next = !(propertyCardFootIsOpen(key, effectiveSpecies, loaderOptions) === true);
+  propertyCardFootOpenStates.set(key, next);
   for (const listener of Array.from(propertyCardFootToggleListeners)) {
     try { listener(key, next); } catch (_) {}
   }
   return next;
 }
 
-function propertyCardFootSetOpen(path, open) {
+function propertyCardFootSetOpen(path, open, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
+  let effectiveSpecies = "";
+  let loaderOptions = {};
+  if (typeof species === "string" || (species && typeof species === "object")) {
+    effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+    loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  } else if (species !== undefined) {
+    loaderOptions = species || {};
+    effectiveSpecies = propertyCardFootSpeciesOf(loaderOptions, undefined);
+  }
   const next = open === true;
-  const current = propertyCardFootOpenStates.get(key) === true;
+  const current = propertyCardFootIsOpen(key, effectiveSpecies, loaderOptions);
+  propertyCardFootOpenStates.set(key, next);
   if (current === next) return next;
-  if (next) propertyCardFootOpenStates.set(key, true);
-  else propertyCardFootOpenStates.delete(key);
   for (const listener of Array.from(propertyCardFootToggleListeners)) {
     try { listener(key, next); } catch (_) {}
   }
@@ -95797,18 +95833,41 @@ function propertyCardFootNextDisclosureId() {
   return `bob-property-foot-${propertyCardFootMountSeq}`;
 }
 
-function propertyCardFootRegisterMount(node, path, disclosureId) {
+function propertyCardFootNormalizeMountSpecies(value) {
+  try {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootRegisterMount(node, path, disclosureId, species) {
   const key = propertyCardFootPath(path);
   if (!node || !key) return null;
+  let disclosure = disclosureId;
+  let mountSpecies = propertyCardFootNormalizeMountSpecies(species);
+  if (!mountSpecies && typeof disclosure === "string") {
+    const trimmed = disclosure.trim();
+    const lower = trimmed.toLowerCase();
+    const known = ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose", "article", "ref", "all"];
+    if (trimmed && known.includes(lower) && !trimmed.startsWith("bob-property") && !trimmed.startsWith("foot-")) {
+      mountSpecies = trimmed;
+      disclosure = undefined;
+    }
+  }
+  if (disclosure && typeof disclosure === "object" && !mountSpecies) {
+    try { mountSpecies = propertyCardFootNormalizeMountSpecies(disclosure.species); } catch (_) {}
+    disclosure = disclosure.disclosureId;
+  }
   const existing = propertyCardFootMountByNode.get(node);
   if (existing && propertyCardFootMounts.has(existing.id)) {
     existing.path = key;
-    if (disclosureId) existing.disclosureId = disclosureId;
+    if (disclosure) existing.disclosureId = disclosure;
+    if (mountSpecies) existing.species = mountSpecies;
     return { id: existing.id, disclosureId: existing.disclosureId };
   }
   propertyCardFootMountSeq += 1;
   const id = `foot-${propertyCardFootMountSeq}`;
-  const entry = { id, node, path: key, disclosureId: disclosureId || `bob-property-foot-${propertyCardFootMountSeq}` };
+  const entry = { id, node, path: key, disclosureId: disclosure || `bob-property-foot-${propertyCardFootMountSeq}`, species: mountSpecies || "" };
   propertyCardFootMounts.set(id, entry);
   try { propertyCardFootMountByNode.set(node, entry); } catch (_) {}
   return { id: entry.id, disclosureId: entry.disclosureId };
@@ -95883,8 +95942,8 @@ function propertyCardFootRenamePath(oldPath, newPath) {
   const from = propertyCardFootPath(oldPath);
   const to = propertyCardFootPath(newPath);
   if (!from || !to || from === to) return false;
-  if (propertyCardFootOpenStates.get(from) === true) {
-    propertyCardFootOpenStates.set(to, true);
+  if (propertyCardFootOpenStates.has(from)) {
+    propertyCardFootOpenStates.set(to, propertyCardFootOpenStates.get(from) === true);
   }
   propertyCardFootOpenStates.delete(from);
   for (const entry of propertyCardFootMounts.values()) {
@@ -96048,11 +96107,33 @@ function propertyCardCanToggleProperties(view) {
 // disconnected, and mounts from a previous file carry its old path, so
 // neither can act. Open state is per path, so every live mount of the note
 // (including a second pane) follows one toggle. Returns whether it acted.
-function propertyCardToggleProperties(view) {
+function propertyCardFootSpeciesForView(view, path) {
+  try {
+    const key = propertyCardFootPath(path);
+    if (!view || !key) return "";
+    for (const entry of propertyCardFootLiveMountsFor(key)) {
+      try {
+        if (entry.species && propertyCardFootViewContains(view, entry.node)) return entry.species;
+      } catch (_) {}
+    }
+    for (const entry of propertyCardFootLiveMountsFor(key)) {
+      try {
+        if (entry.species) return entry.species;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardToggleProperties(view, species) {
   try {
     if (!propertyCardCanToggleProperties(view)) return false;
     const path = propertyCardFootViewPath(view);
-    propertyCardFootToggle(path);
+    let effective = "";
+    try {
+      effective = propertyCardFootSpeciesOf(species, propertyCardFootSpeciesForView(view, path));
+    } catch (_) {}
+    propertyCardFootToggle(path, effective);
     return true;
   } catch (_) {
     return false;
@@ -97232,7 +97313,9 @@ function propertyCardFootAdapterSpec(options = {}) {
   } catch (_) {
     stamp = null;
   }
-  return { path, inventory, stamp, contractIssues, firstSetting };
+  const kind = typeof options.kind === "string" ? options.kind : "";
+  const species = typeof options.species === "string" && options.species ? options.species : kind;
+  return { path, inventory, stamp, contractIssues, firstSetting, kind, species };
 }
 
 function propertyCardFootAdapterDigest(spec) {
@@ -97267,10 +97350,25 @@ function propertyCardFootAdapterDigest(spec) {
   }
 }
 
-function propertyCardFootAdapterExtra(path, spec) {
+function propertyCardFootAdapterSpeciesOf(value, fallback) {
+  try {
+    if (typeof value === "string" && value) return value;
+    if (value && typeof value === "object" && typeof value.species === "string" && value.species) {
+      return value.species;
+    }
+  } catch (_) {}
+  try {
+    if (typeof fallback === "string" && fallback) return fallback;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootAdapterExtra(path, spec, species) {
   let open = false;
   try {
-    open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+    const fromSpec = spec && (spec.species || spec.kind);
+    const effective = propertyCardFootAdapterSpeciesOf(species, fromSpec);
+    open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, effective);
   } catch (_) {}
   return { footOpen: open, footDigest: propertyCardFootAdapterDigest(spec), footSpec: spec };
 }
@@ -97318,13 +97416,14 @@ function propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, sou
 function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   const refresh = typeof options.refresh === "function" ? options.refresh : () => {};
   const pending = options.pendingScroll;
+  const species = propertyCardFootAdapterSpeciesOf(options.species, options.kind);
   return {
     onToggle: (notePath, next) => {
       let decided = next;
       try {
         if (typeof propertyCardFootToggle === "function") {
-          propertyCardFootToggle(notePath);
-          decided = propertyCardFootIsOpen(notePath);
+          propertyCardFootToggle(notePath, species);
+          decided = propertyCardFootIsOpen(notePath, species);
         }
       } catch (_) {}
       if (decided === true && pending instanceof Set) pending.add(propertyCardFootAdapterPath(notePath));
@@ -97356,7 +97455,7 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   };
 }
 
-function propertyCardFootAdapterTrack(container, path, card, tracked) {
+function propertyCardFootAdapterTrack(container, path, card, tracked, species) {
   const key = propertyCardFootAdapterPath(path);
   try {
     if (typeof propertyCardFootReleaseScope === "function") {
@@ -97365,6 +97464,18 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
   } catch (_) {}
   if (!card || !key) return null;
   if (tracked instanceof Set) tracked.add(key);
+  let mountSpecies = propertyCardFootAdapterSpeciesOf(species, undefined);
+  try {
+    if (!mountSpecies && tracked && typeof tracked === "object" && typeof tracked.species === "string") {
+      mountSpecies = tracked.species;
+    }
+  } catch (_) {}
+  try {
+    if (!mountSpecies && card && typeof card.getAttribute === "function") {
+      const fromCard = card.getAttribute("data-card-kind") || card.getAttribute("data-card-species") || "";
+      if (fromCard) mountSpecies = String(fromCard);
+    }
+  } catch (_) {}
   let foot = null;
   try {
     foot = typeof card.querySelector === "function"
@@ -97381,7 +97492,7 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
         : null;
       const drawerId = drawer?.getAttribute?.("id") || "";
       const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
-      return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+      return propertyCardFootRegisterMount(foot, key, disclosureId || undefined, mountSpecies || undefined);
     }
   } catch (_) {}
   return null;
@@ -97391,7 +97502,15 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
   try {
     const key = propertyCardFootAdapterPath(path);
     if (!card || !key || typeof propertyCardFootBuildEl !== "function") return null;
-    const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(key);
+    const fromSpec = spec && (spec.species || spec.kind);
+    let fromCard = "";
+    try {
+      if (card && typeof card.getAttribute === "function") {
+        fromCard = card.getAttribute("data-card-kind") || "";
+      }
+    } catch (_) {}
+    const species = propertyCardFootAdapterSpeciesOf(context && context.species, fromSpec || fromCard);
+    const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(key, species);
     let disclosureId = "";
     try {
       disclosureId = typeof propertyCardFootNextDisclosureId === "function"
@@ -98129,10 +98248,10 @@ const PROPERTY_CARD_CABINET_KINDS = Object.freeze({
   projects: Object.freeze({ noun: "Projects", role: "content", rank: 20, defaultOpen: false }),
   notebooks: Object.freeze({ noun: "Notebooks", role: "content", rank: 30, defaultOpen: false }),
   albums: Object.freeze({ noun: "Albums", role: "content", rank: 40, defaultOpen: false }),
-  records: Object.freeze({ noun: "Records", role: "content", rank: 50, defaultOpen: true }),
-  outline: Object.freeze({ noun: "Outline", role: "content", rank: 60, defaultOpen: "healthy-closed" }),
-  schema: Object.freeze({ noun: "Schema", role: "config", rank: 70, defaultOpen: "healthy-closed" }),
-  setup: Object.freeze({ noun: "Setup", role: "config", rank: 80, defaultOpen: "healthy-closed" }),
+  records: Object.freeze({ noun: "Records", role: "content", rank: 50, defaultOpen: false }),
+  outline: Object.freeze({ noun: "Outline", role: "content", rank: 60, defaultOpen: false }),
+  schema: Object.freeze({ noun: "Schema", role: "config", rank: 70, defaultOpen: false }),
+  setup: Object.freeze({ noun: "Setup", role: "config", rank: 80, defaultOpen: false }),
   properties: Object.freeze({ noun: "Properties", role: "properties", rank: 100, defaultOpen: false }),
 });
 
@@ -98164,10 +98283,12 @@ function propertyCardCabinetOrder(kinds) {
 function propertyCardCabinetDefaultOpen(kind, options = {}) {
   const spec = PROPERTY_CARD_CABINET_KINDS[kind];
   if (!spec) return false;
-  if (spec.defaultOpen === "healthy-closed") {
-    return typeof options.problems === "string" && options.problems.length > 0;
-  }
-  return spec.defaultOpen === true;
+  try {
+    if (typeof propertyCardCabinetConfiguredOpen === "function") {
+      return propertyCardCabinetConfiguredOpen(options.species, kind, options) === true;
+    }
+  } catch (_) {}
+  return false;
 }
 
 function propertyCardCabinetNumbering(extras) {
@@ -98175,6 +98296,229 @@ function propertyCardCabinetNumbering(extras) {
     .filter((kind) => PROPERTY_CARD_CABINET_KINDS[kind].role !== "properties");
   const numbered = ordered.slice(-9);
   return numbered.map((kind, index) => ({ kind, number: numbered.length - index }));
+}
+// ---- src/240wn-plugin-cabinet-defaults.js ----
+// Property-card cabinet defaults from Bob's config.yml `cabinets:` block.
+// Every cabinet starts closed on a note's first paint in a session unless
+// the block opens it for that card type. Open or closed stays session-only
+// view state: never frontmatter, never a vault write, never a bob spawn.
+// Mirrors the `plan:` loader contract in 320-plan-lane-and-config.js:
+// same injectable options, same stat-keyed cache, live edits reach a
+// cabinet with no session choice on its next paint.
+const PROPERTY_CARD_CABINET_DEFAULT_TYPES = Object.freeze([
+  "album",
+  "record",
+  "day",
+  "week",
+  "quarter",
+  "year",
+  "bank",
+  "area",
+  "project",
+  "notebook",
+  "prose",
+  "ref",
+]);
+
+function propertyCardCabinetDefaultsNormalizeType(raw) {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "all") return "all";
+  if (normalized === "article") return "prose";
+  if (Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, normalized)) {
+    void normalized;
+  }
+  if (PROPERTY_CARD_CABINET_DEFAULT_TYPES.includes(normalized)) return normalized;
+  return null;
+}
+
+function propertyCardCabinetDefaultsNormalizeKind(raw) {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "all") return "all";
+  if (Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, normalized)) return normalized;
+  return null;
+}
+
+function propertyCardCabinetDefaultsNormalizeOpen(raw) {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "open") return true;
+  if (normalized === "closed") return false;
+  return null;
+}
+
+let propertyCardCabinetDefaultsCache = { key: null, result: null };
+const propertyCardCabinetDefaultsWarned = new Set();
+
+function resetPropertyCardCabinetDefaultsCache() {
+  propertyCardCabinetDefaultsCache = { key: null, result: null };
+  try { propertyCardCabinetDefaultsWarned.clear(); } catch (_) {}
+}
+
+function propertyCardCabinetDefaultsConfigPath(options = {}) {
+  try {
+    if (typeof options.configPath === "string" && options.configPath) return options.configPath;
+  } catch (_) {}
+  try {
+    if (typeof planConfigPath === "function") return planConfigPath(options);
+  } catch (_) {}
+  return "bob/config.yml";
+}
+
+function loadPropertyCardCabinetDefaults(options = {}) {
+  const configPath = propertyCardCabinetDefaultsConfigPath(options);
+  const platform = options.Platform === undefined
+    ? (typeof Platform !== "undefined" ? Platform : undefined)
+    : options.Platform;
+  if (platform && platform.isDesktopApp === false) {
+    return { rules: {}, invalid: false, warnings: [], configPath };
+  }
+  let fsModule = null;
+  try {
+    fsModule = options.fsModule === undefined
+      ? (typeof planRequireOptionalNodeModule === "function" ? planRequireOptionalNodeModule("fs") : null)
+      : options.fsModule;
+  } catch (_) {
+    fsModule = null;
+  }
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    return { rules: {}, invalid: false, warnings: [], configPath };
+  }
+  let yamlParser = null;
+  try {
+    yamlParser = options.parseYaml === undefined
+      ? (typeof parseYaml === "function" ? parseYaml : null)
+      : options.parseYaml;
+  } catch (_) {
+    yamlParser = null;
+  }
+  if (typeof yamlParser !== "function") {
+    return { rules: {}, invalid: false, warnings: [], configPath };
+  }
+  let statKey = null;
+  try {
+    statKey = typeof planCapsStatKey === "function" ? planCapsStatKey(fsModule, configPath) : null;
+  } catch (_) {
+    statKey = null;
+  }
+  const cacheKey = statKey === null ? null : `${configPath}\n${statKey}`;
+  if (cacheKey !== null && propertyCardCabinetDefaultsCache.key === cacheKey && propertyCardCabinetDefaultsCache.result) {
+    return propertyCardCabinetDefaultsCache.result;
+  }
+  const readUncached = () => {
+    let rawConfig = null;
+    try {
+      rawConfig = fsModule.readFileSync(configPath, "utf8");
+    } catch (error) {
+      const missing = error && error.code === "ENOENT";
+      return {
+        rules: {},
+        invalid: missing ? false : true,
+        warnings: [],
+        configPath,
+      };
+    }
+    let parsed = null;
+    try {
+      parsed = yamlParser(rawConfig);
+    } catch (_) {
+      return { rules: {}, invalid: true, warnings: [], configPath };
+    }
+    const root = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    const block = root && root.cabinets !== undefined ? root.cabinets : undefined;
+    if (block === undefined) {
+      return { rules: {}, invalid: false, warnings: [], configPath };
+    }
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      const result = { rules: {}, invalid: true, warnings: ["cabinets"], configPath };
+      propertyCardCabinetDefaultsWarnOnce(cacheKey || configPath, configPath, result.warnings);
+      return result;
+    }
+    const rules = {};
+    const warnings = [];
+    for (const rawType of Object.keys(block)) {
+      const type = propertyCardCabinetDefaultsNormalizeType(rawType);
+      const typeValue = block[rawType];
+      if (type === null || !typeValue || typeof typeValue !== "object" || Array.isArray(typeValue)) {
+        warnings.push(`cabinets.${String(rawType).trim() || rawType}`);
+        continue;
+      }
+      for (const rawCabinet of Object.keys(typeValue)) {
+        const kind = propertyCardCabinetDefaultsNormalizeKind(rawCabinet);
+        const open = propertyCardCabinetDefaultsNormalizeOpen(typeValue[rawCabinet]);
+        if (kind === null || open === null) {
+          warnings.push(`cabinets.${String(rawType).trim() || rawType}.${String(rawCabinet).trim() || rawCabinet}`);
+          continue;
+        }
+        if (!rules[type]) rules[type] = {};
+        rules[type][kind] = open;
+      }
+    }
+    const result = { rules, invalid: warnings.length > 0, warnings, configPath };
+    if (warnings.length > 0) {
+      propertyCardCabinetDefaultsWarnOnce(cacheKey || configPath, configPath, warnings);
+    }
+    return result;
+  };
+  const result = readUncached();
+  if (cacheKey !== null) {
+    propertyCardCabinetDefaultsCache = { key: cacheKey, result };
+  }
+  return result;
+}
+
+function propertyCardCabinetDefaultsWarnOnce(fingerprint, configPath, warnings) {
+  try {
+    if (propertyCardCabinetDefaultsWarned.has(fingerprint)) return;
+    propertyCardCabinetDefaultsWarned.add(fingerprint);
+    if (typeof console !== "undefined" && typeof console.warn === "function") {
+      console.warn(`bob-ledger-tools: ignoring invalid cabinets config at ${configPath}: ${warnings.join(", ")}`);
+    }
+  } catch (_) {}
+}
+
+function propertyCardCabinetConfiguredOpen(species, kind, options = {}) {
+  const normalizedKind = typeof kind === "string" ? kind.trim().toLowerCase() : "";
+  if (!normalizedKind || !Object.prototype.hasOwnProperty.call(PROPERTY_CARD_CABINET_KINDS, normalizedKind)) {
+    return false;
+  }
+  let effective = null;
+  try {
+    const raw = species !== undefined && species !== null && species !== ""
+      ? species
+      : options.species;
+    effective = propertyCardCabinetDefaultsNormalizeType(typeof raw === "string" ? raw : "");
+  } catch (_) {
+    effective = null;
+  }
+  let snapshot = null;
+  try {
+    snapshot = loadPropertyCardCabinetDefaults(options);
+  } catch (_) {
+    snapshot = null;
+  }
+  const rules = snapshot && snapshot.rules && typeof snapshot.rules === "object" ? snapshot.rules : {};
+  const at = (type, cabinet) => {
+    try {
+      const row = rules[type];
+      if (row && Object.prototype.hasOwnProperty.call(row, cabinet)) return row[cabinet];
+    } catch (_) {}
+    return undefined;
+  };
+  if (effective) {
+    const direct = at(effective, normalizedKind);
+    if (direct !== undefined) return direct === true;
+    const typeAll = at(effective, "all");
+    if (typeAll !== undefined) return typeAll === true;
+  }
+  const allKind = at("all", normalizedKind);
+  if (allKind !== undefined) return allKind === true;
+  const allAll = at("all", "all");
+  if (allAll !== undefined) return allAll === true;
+  return false;
 }
 // ---- src/240wb-plugin-cabinet-state.js ----
 // Session-only content-cabinet state, keyed by normalized path and kind.
@@ -98209,14 +98553,17 @@ function propertyCardCabinetIsOpen(path, kind, options = {}) {
   if (!spec || spec.role !== "content" || !key) return propertyCardCabinetDefaultOpen(kind, options);
   let choice = null;
   try {
+    const stored = propertyCardCabinetOpenStates.get(key);
     choice = typeof propertyCardFoldChoiceFromStored === "function"
-      ? propertyCardFoldChoiceFromStored(propertyCardCabinetOpenStates.get(key))
+      ? propertyCardFoldChoiceFromStored(stored)
       : null;
+    if (!choice && stored && typeof stored === "object" && typeof stored.open === "boolean") {
+      choice = stored;
+    }
   } catch (_) {}
-  const problems = propertyCardCabinetProblemSignature(options.problems);
   try {
     const restamped = typeof propertyCardFoldRestamp === "function"
-      ? propertyCardFoldRestamp(choice, problems)
+      ? propertyCardFoldRestamp(choice, "")
       : choice;
     if (restamped && restamped !== choice) {
       propertyCardCabinetOpenStates.set(key, restamped);
@@ -98227,7 +98574,7 @@ function propertyCardCabinetIsOpen(path, kind, options = {}) {
     if (typeof propertyCardFoldResolve === "function") {
       return propertyCardFoldResolve({
         choice,
-        problems,
+        problems: "",
         foldDefault: propertyCardCabinetDefaultOpen(kind, options),
       }) === true;
     }
@@ -98241,11 +98588,10 @@ function propertyCardCabinetSetOpen(path, kind, open, options = {}) {
   if (!spec || spec.role !== "content" || !key) return false;
   const normalized = propertyCardCabinetPath(path);
   const next = open === true;
-  const problems = propertyCardCabinetProblemSignature(options.problems);
   const previous = propertyCardCabinetOpenStates.get(key);
   const choice = typeof propertyCardFoldChoice === "function"
-    ? propertyCardFoldChoice(next, problems)
-    : { open: next, problems };
+    ? propertyCardFoldChoice(next, "")
+    : { open: next, problems: "" };
   if (previous?.open === choice.open && previous?.problems === choice.problems) return next;
   propertyCardCabinetOpenStates.set(key, choice);
   for (const listener of Array.from(propertyCardCabinetStateListeners)) {
@@ -103265,44 +103611,27 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupIsExpanded(sourcePath, model) {
     const key = bankSetupHubPath(sourcePath);
     const map = this.bankSetupExpandedMap();
-    let probe = model;
-    try {
-      if (!probe) {
-        const entry = this.bankSetupEntry();
-        probe = bankSetupModel(entry.report, {
-          error: entry.error,
-          stale: entry.stale,
-          refreshing: entry.refreshing,
-          desktop: this.bankSetupDesktop(),
-          expanded: false,
-          lastGoodAt: this.bankSetupLastGoodAt,
-          lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
-        });
-      }
-    } catch (_) {
-      probe = model || null;
-    }
-    const problems = probe && typeof probe.problems === "string"
-      ? probe.problems
-      : bankSetupFoldProblems(probe || { state: "valid", findings: [] });
     let stored = key ? map.get(key) : null;
     if (typeof stored === "boolean") {
       stored = { open: stored === true, problems: "" };
+    } else if (stored && typeof stored === "object" && typeof propertyCardFoldChoiceFromStored === "function") {
+      const normalized = propertyCardFoldChoiceFromStored(stored);
+      if (normalized) stored = normalized;
     }
     const restamped = typeof propertyCardFoldRestamp === "function"
-      ? propertyCardFoldRestamp(stored, problems)
+      ? propertyCardFoldRestamp(stored, "")
       : stored;
     if (key && restamped !== stored && restamped) {
       map.set(key, restamped);
     }
     let foldDefault = false;
     try {
-      foldDefault = propertyCardSpecies?.("bank")?.foldDefault === true;
+      foldDefault = propertyCardCabinetDefaultOpen("setup", { species: "bank" }) === true;
     } catch (_) {
       foldDefault = false;
     }
     return typeof propertyCardFoldResolve === "function"
-      ? propertyCardFoldResolve({ choice: restamped, problems, foldDefault })
+      ? propertyCardFoldResolve({ choice: restamped, problems: "", foldDefault })
       : Boolean(restamped && restamped.open);
   }
 
@@ -103311,17 +103640,9 @@ class BobLedgerToolsBankSetupMixin {
     if (!key) {
       return;
     }
-    let signature = problems;
-    if (typeof signature !== "string") {
-      try {
-        signature = this.bankSetupModelFor(sourcePath)?.problems || "";
-      } catch (_) {
-        signature = "";
-      }
-    }
     const choice = typeof propertyCardFoldChoice === "function"
-      ? propertyCardFoldChoice(expanded === true, signature || "")
-      : { open: expanded === true, problems: signature || "" };
+      ? propertyCardFoldChoice(expanded === true, "")
+      : { open: expanded === true, problems: "" };
     this.bankSetupExpandedMap().set(key, choice);
     this.refreshBankSetupReading();
     this.refreshBankSetupEditors();
@@ -104266,12 +104587,13 @@ class BobLedgerToolsBankSetupFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "bank");
   }
 
   bankSetupFootHandlers(path) {
     const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "bank",
       pendingScroll: this.bankSetupFootPendingScroll,
       refresh: () => this.scheduleBankSetupRefresh(),
       hoverSource: "bob-bank-setup",
@@ -104295,7 +104617,7 @@ class BobLedgerToolsBankSetupFootMixin {
   }
 
   bankSetupTrackFoot(container, path, header) {
-    return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
+    return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked, "bank");
   }
 
   bankSetupAppendFoot(header, path, doc, footSpec, options = {}) {
@@ -104307,6 +104629,7 @@ class BobLedgerToolsBankSetupFootMixin {
       this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
       {
         plugin: this,
+        species: "bank",
         view: options?.view || null,
         component: options?.component || this,
         source: options?.sourceText,
@@ -116104,9 +116427,11 @@ class BobLedgerToolsHomeCardFootMixin {
     return extra;
   }
 
-  homeCardFootHandlers(path) {
+  homeCardFootHandlers(path, model) {
     const filePath = homeCardPath(path);
+    const species = (model && (model.kind || model.species)) || "";
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species,
       pendingScroll: this.homeCardFootPendingScroll,
       refresh: () => this.scheduleHomeCardRefresh(),
       hoverSource: "bob-home-card",
@@ -116120,8 +116445,9 @@ class BobLedgerToolsHomeCardFootMixin {
     });
   }
 
-  homeCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
+  homeCardTrackFoot(container, path, card, model) {
+    const species = (model && (model.kind || model.species)) || "";
+    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked, species || undefined);
   }
 
   // Append the shared foot after content, outside the collapsible body.
@@ -116129,12 +116455,14 @@ class BobLedgerToolsHomeCardFootMixin {
     const key = homeCardPath(path);
     if (!card || !key) return null;
     const spec = footSpec || this.homeCardFootSpec(key, model);
+    const species = (model && (model.kind || model.species)) || spec?.species || spec?.kind || "";
     return propertyCardFootAdapterAppend(
       card, key, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
-      this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      this.homeCardFootHandlers(key, model), this.homeCardFootPendingScroll,
       {
         plugin: this,
+        species: species || undefined,
         view: options?.view || null,
         readingScope: options?.readingScope || null,
         component: options?.component || this,
@@ -117764,6 +118092,7 @@ class BobLedgerToolsNotebookCardFootMixin {
   notebookCardFootHandlers(path) {
     const filePath = notebookCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "notebook",
       pendingScroll: this.notebookCardFootPendingScroll,
       refresh: () => this.scheduleNotebookCardRefresh?.(),
       hoverSource: "bob-notebook-card",
@@ -117774,7 +118103,7 @@ class BobLedgerToolsNotebookCardFootMixin {
   }
 
   notebookCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.notebookCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.notebookCardFootTracked, "notebook");
   }
 
   notebookCardCopyRoute(route) {
@@ -117796,6 +118125,7 @@ class BobLedgerToolsNotebookCardFootMixin {
     const built = propertyCardFootAdapterAppend(
       card, filePath, doc, options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.notebookCardFootHandlers(filePath), this.notebookCardFootPendingScroll,
+      { species: "notebook" },
     );
     if (!built?.element || !model?.route) return built;
     const route = notebookCardDomEl(doc, "button", "bob-notebook-card-route");
@@ -118730,7 +119060,7 @@ class BobLedgerToolsProseNoteCardMixin {
     return propertyCardFoldResolve({
       choice,
       problems: "",
-      foldDefault: propertyCardSpecies(PROSE_NOTE_CARD_KIND)?.foldDefault,
+      foldDefault: propertyCardCabinetDefaultOpen("outline", { species: "prose" }),
     });
   }
 
@@ -119397,12 +119727,13 @@ class BobLedgerToolsProseNoteCardFootMixin {
   proseNoteCardFootExtra(path, model) {
     const spec = this.proseNoteCardFootSpec(path, model)
       || { path: proseNoteCardPath(path), inventory: propertyCardFootAdapterPendingInventory(), stamp: null };
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "prose");
   }
 
   proseNoteCardFootHandlers(path) {
     const filePath = proseNoteCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "prose",
       pendingScroll: this.proseNoteCardFootPendingScroll,
       refresh: () => this.scheduleProseNoteCardRefresh(),
       hoverSource: "bob-prose-note-card",
@@ -119413,7 +119744,7 @@ class BobLedgerToolsProseNoteCardFootMixin {
   }
 
   proseNoteCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.proseNoteCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.proseNoteCardFootTracked, "prose");
   }
 
   proseNoteCardAppendFoot(card, path, model, doc, footSpec, options = {}) {
@@ -119429,6 +119760,7 @@ class BobLedgerToolsProseNoteCardFootMixin {
       this.proseNoteCardFootPendingScroll,
       {
         plugin: this,
+        species: "prose",
         view: options?.view || null,
         component: options?.component || this,
         source: options?.sourceText,
@@ -120948,12 +121280,13 @@ class BobLedgerToolsRefNoteCardFootMixin {
   refNoteCardFootExtra(path, model) {
     const spec = this.refNoteCardFootSpec(path, model)
       || { path: refNoteCardPath(path), inventory: propertyCardFootAdapterPendingInventory(), stamp: null };
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "ref");
   }
 
   refNoteCardFootHandlers(path) {
     const filePath = refNoteCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "ref",
       pendingScroll: this.refNoteCardFootPendingScroll,
       refresh: () => this.scheduleRefNoteCardRefresh?.(),
       hoverSource: "bob-ref-card",
@@ -120964,7 +121297,7 @@ class BobLedgerToolsRefNoteCardFootMixin {
   }
 
   refNoteCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.refNoteCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.refNoteCardFootTracked, "ref");
   }
 
   refNoteCardAppendFoot(card, path, model, doc, footSpec, options = {}) {
@@ -120978,6 +121311,7 @@ class BobLedgerToolsRefNoteCardFootMixin {
       options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.refNoteCardFootHandlers(key),
       this.refNoteCardFootPendingScroll,
+      { species: "ref" },
     );
     if (!built?.element) return built;
     const lint = doc.createElement("span");
@@ -127139,23 +127473,24 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderIsExpanded(path, model) {
     const key = albumHeaderPath(path);
     const map = this.albumHeaderExpandedMap();
-    const currentModel = model || this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
-    const problems = albumHeaderFoldProblems(currentModel);
     const stored = key ? map.get(key) : null;
-    const choice = propertyCardFoldRestamp(stored, problems);
-    if (key && choice !== stored && choice) map.set(key, choice);
+    const choice = typeof propertyCardFoldChoiceFromStored === "function"
+      ? propertyCardFoldChoiceFromStored(stored)
+      : (stored && typeof stored === "object" && typeof stored.open === "boolean" ? stored : null);
+    const restamped = typeof propertyCardFoldRestamp === "function"
+      ? propertyCardFoldRestamp(choice, "")
+      : choice;
+    if (key && restamped && restamped !== stored) map.set(key, restamped);
     return propertyCardFoldResolve({
-      choice,
-      problems,
-      foldDefault: propertyCardCabinetDefaultOpen("schema", { problems }),
+      choice: restamped || choice,
+      problems: "",
+      foldDefault: propertyCardCabinetDefaultOpen("schema", { species: "album" }),
     });
   }
 
   albumHeaderSetExpanded(path, expanded, problems) {
     const key = albumHeaderPath(path);
-    const currentModel = this.albumHeaderCardModelFor(key)?.body || this.albumHeaderModelFor(key);
-    const signature = typeof problems === "string" ? problems : albumHeaderFoldProblems(currentModel);
-    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded, signature));
+    if (key) this.albumHeaderExpandedMap().set(key, propertyCardFoldChoice(expanded === true, ""));
     this.refreshAlbumHeaderReading();
     this.refreshAlbumHeaderEditors();
   }
@@ -127934,11 +128269,12 @@ class BobLedgerToolsAlbumHeaderFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "album");
   }
 
   albumHeaderFootHandlers(path) {
     return propertyCardFootAdapterHandlers(this, path, {
+      species: "album",
       pendingScroll: this.albumHeaderFootPendingScroll,
       refresh: () => this.scheduleAlbumHeaderRefresh(),
       hoverSource: "bob-album-header",
@@ -127956,7 +128292,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
   }
 
   albumHeaderTrackFoot(container, path, header) {
-    return propertyCardFootAdapterTrack(container, path, header, this.albumHeaderFootTracked);
+    return propertyCardFootAdapterTrack(container, path, header, this.albumHeaderFootTracked, "album");
   }
 
   albumHeaderAppendFoot(header, card, options, doc) {
@@ -127968,6 +128304,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
       {
         plugin: this,
+        species: "album",
         view: options?.view || null,
         readingScope: options?.readingScope || null,
         component: options?.component || this,
@@ -137017,7 +137354,7 @@ class BobLedgerToolsRecordSheetFootMixin {
     }
     let open = false;
     try {
-      open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+      open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, "record");
     } catch (_) {}
     return { footOpen: open, footDigest: this.recordSheetFootDigest(spec), footSpec: spec };
   }
@@ -137049,8 +137386,8 @@ class BobLedgerToolsRecordSheetFootMixin {
         let decided = next;
         try {
           if (typeof propertyCardFootToggle === "function") {
-            propertyCardFootToggle(notePath);
-            decided = propertyCardFootIsOpen(notePath);
+            propertyCardFootToggle(notePath, "record");
+            decided = propertyCardFootIsOpen(notePath, "record");
           }
         } catch (_) {}
         if (decided === true) {
@@ -137109,7 +137446,7 @@ class BobLedgerToolsRecordSheetFootMixin {
           : null;
         const drawerId = drawer?.getAttribute?.("id") || "";
         const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
-        return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+        return propertyCardFootRegisterMount(foot, key, disclosureId || undefined, "record");
       }
     } catch (_) {}
     return null;
@@ -137124,7 +137461,7 @@ class BobLedgerToolsRecordSheetFootMixin {
       const path = recordSheetPath(options?.sourcePath || model?.identity?.path || model?.path);
       if (!sheet || !path || typeof propertyCardFootBuildEl !== "function") return null;
       const spec = footSpec || this.recordSheetFootSpec(path, model && model.identity ? model : null);
-      const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+      const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, "record");
       let disclosureId = "";
       try {
         disclosureId = typeof propertyCardFootNextDisclosureId === "function"
@@ -193334,9 +193671,11 @@ class BobLedgerToolsIntentionCardFootMixin {
     return JSON.stringify([model?.signature || "", extra?.footDigest || "", extra?.footOpen === true]);
   }
 
-  intentionCardFootHandlers(path) {
+  intentionCardFootHandlers(path, model) {
     const key = intentionCardFilePath(path);
+    const species = (model && (model.kind || model.species)) || "";
     return propertyCardFootAdapterHandlers(this, key, {
+      species,
       pendingScroll: this.intentionCardFootPendingScroll,
       refresh: () => this.intentionCardHost?.().scheduleRefresh?.(),
       hoverSource: "bob-intention-card",
@@ -193346,15 +193685,18 @@ class BobLedgerToolsIntentionCardFootMixin {
     });
   }
 
-  intentionCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.intentionCardFootTracked);
+  intentionCardTrackFoot(container, path, card, model) {
+    const species = (model && (model.kind || model.species)) || "";
+    return propertyCardFootAdapterTrack(container, path, card, this.intentionCardFootTracked, species || undefined);
   }
 
   intentionCardAppendFoot(card, model, doc) {
     const path = intentionCardFilePath(model?.path);
     const spec = model?.footSpec || this.intentionCardFootSpec(path, model);
+    const species = (model && (model.kind || model.species)) || spec?.species || spec?.kind || "";
     return propertyCardFootAdapterAppend(
-      card, path, doc, spec, this.intentionCardFootHandlers(path), this.intentionCardFootPendingScroll,
+      card, path, doc, spec, this.intentionCardFootHandlers(path, model), this.intentionCardFootPendingScroll,
+      { species: species || undefined },
     );
   }
 }
@@ -220522,6 +220864,9 @@ try {
       propertyCardFootIsOpen,
       propertyCardFootToggle,
       propertyCardFootSetOpen,
+      propertyCardFootSpeciesOf,
+      propertyCardFootConfiguredOpen,
+      propertyCardFootSpeciesForView,
       propertyCardFootOnToggle,
       propertyCardFootNextDisclosureId,
       propertyCardFootRegisterMount,
@@ -220549,6 +220894,7 @@ try {
       propertyCardFootAdapterEnsureSource,
       propertyCardFootAdapterSpec,
       propertyCardFootAdapterDigest,
+      propertyCardFootAdapterSpeciesOf,
       propertyCardFootAdapterExtra,
       propertyCardFootAdapterSearchTag,
       propertyCardFootAdapterHoverLink,
@@ -220793,6 +221139,9 @@ try {
       propertyCardCabinetKindForFold,
       propertyCardCabinetOrder,
       propertyCardCabinetDefaultOpen,
+      propertyCardCabinetConfiguredOpen,
+      loadPropertyCardCabinetDefaults,
+      resetPropertyCardCabinetDefaultsCache,
       propertyCardCabinetNumbering,
       propertyCardCabinetOpenStates,
       propertyCardCabinetIsOpen,

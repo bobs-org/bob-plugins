@@ -207,6 +207,7 @@
   "240t-plugin-property-card-note-species.js",
   "240u-plugin-property-card-floor.js",
   "240wa-plugin-cabinet-model.js",
+  "240wn-plugin-cabinet-defaults.js",
   "240wb-plugin-cabinet-state.js",
   "240wc-plugin-cabinet-providers.js",
   "240wd-plugin-cabinet-view.js",

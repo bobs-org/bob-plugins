@@ -6,10 +6,10 @@ const PROPERTY_CARD_CABINET_KINDS = Object.freeze({
   projects: Object.freeze({ noun: "Projects", role: "content", rank: 20, defaultOpen: false }),
   notebooks: Object.freeze({ noun: "Notebooks", role: "content", rank: 30, defaultOpen: false }),
   albums: Object.freeze({ noun: "Albums", role: "content", rank: 40, defaultOpen: false }),
-  records: Object.freeze({ noun: "Records", role: "content", rank: 50, defaultOpen: true }),
-  outline: Object.freeze({ noun: "Outline", role: "content", rank: 60, defaultOpen: "healthy-closed" }),
-  schema: Object.freeze({ noun: "Schema", role: "config", rank: 70, defaultOpen: "healthy-closed" }),
-  setup: Object.freeze({ noun: "Setup", role: "config", rank: 80, defaultOpen: "healthy-closed" }),
+  records: Object.freeze({ noun: "Records", role: "content", rank: 50, defaultOpen: false }),
+  outline: Object.freeze({ noun: "Outline", role: "content", rank: 60, defaultOpen: false }),
+  schema: Object.freeze({ noun: "Schema", role: "config", rank: 70, defaultOpen: false }),
+  setup: Object.freeze({ noun: "Setup", role: "config", rank: 80, defaultOpen: false }),
   properties: Object.freeze({ noun: "Properties", role: "properties", rank: 100, defaultOpen: false }),
 });
 
@@ -41,10 +41,12 @@ function propertyCardCabinetOrder(kinds) {
 function propertyCardCabinetDefaultOpen(kind, options = {}) {
   const spec = PROPERTY_CARD_CABINET_KINDS[kind];
   if (!spec) return false;
-  if (spec.defaultOpen === "healthy-closed") {
-    return typeof options.problems === "string" && options.problems.length > 0;
-  }
-  return spec.defaultOpen === true;
+  try {
+    if (typeof propertyCardCabinetConfiguredOpen === "function") {
+      return propertyCardCabinetConfiguredOpen(options.species, kind, options) === true;
+    }
+  } catch (_) {}
+  return false;
 }
 
 function propertyCardCabinetNumbering(extras) {

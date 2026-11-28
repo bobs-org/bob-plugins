@@ -236,7 +236,7 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
   if (!provider) return null;
   const summary = applied.summary === null || applied.summary === undefined ? "" : String(applied.summary);
   const problems = typeof applied.problems === "string" ? applied.problems : "";
-  const open = propertyCardCabinetIsOpen(path, kind, { problems });
+  const open = propertyCardCabinetIsOpen(path, kind, { problems, species });
   const bodyId = propertyCardFoldNextId();
   const panel = propertyCardCabinetCreateEl(doc, "section", `bob-cabinet-panel bob-cabinet-panel-${kind}`);
   if (!panel) return null;
@@ -260,9 +260,9 @@ function propertyCardCabinetBuildProviderPanel(doc, path, species, kind, provide
     open, keyLive: context?.keyLive === true || context?.spec?.keyLive === true, restKey: "_",
     tooltip: `Toggle ${PROPERTY_CARD_CABINET_KINDS[kind]?.noun || kind} cabinet (_)`,
     onToggle: (next) => {
-      const previous = propertyCardCabinetIsOpen(path, kind, { problems });
+      const previous = propertyCardCabinetIsOpen(path, kind, { problems, species });
       if (previous === next) return;
-      propertyCardCabinetSetOpen(path, kind, next, { problems });
+      propertyCardCabinetSetOpen(path, kind, next, { problems, species });
       const bodyState = propertyCardCabinetProviderBody(panel, provider, context, kind, path, paintKey, next);
       try {
         if (next && !bodyState?.wasOpen) provider.onOpen?.({ path, view: context?.view || null });

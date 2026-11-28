@@ -179,7 +179,7 @@ class BobLedgerToolsProseNoteCardMixin {
     return propertyCardFoldResolve({
       choice,
       problems: "",
-      foldDefault: propertyCardSpecies(PROSE_NOTE_CARD_KIND)?.foldDefault,
+      foldDefault: propertyCardCabinetDefaultOpen("outline", { species: "prose" }),
     });
   }
 

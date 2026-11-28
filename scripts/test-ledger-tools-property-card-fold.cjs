@@ -116,8 +116,10 @@ function foldButton(doc, path, open = false, compact = true) {
 }
 
 test("fold state follows species defaults and health-stamped choices", () => {
-  assert.equal(helpers.propertyCardSpecies("bank").foldDefault, false);
-  for (const kind of ["album", "record", "area", "project"]) {
+  assert.equal(Object.hasOwn(helpers.propertyCardSpecies("bank"), "foldDefault"), false);
+  assert.equal(Object.hasOwn(helpers.propertyCardSpecies("album"), "foldDefault"), false);
+  assert.equal(Object.hasOwn(helpers.propertyCardSpecies("prose"), "foldDefault"), false);
+  for (const kind of ["record", "area", "project"]) {
     assert.equal(helpers.propertyCardSpecies(kind).foldDefault, true);
   }
   for (const kind of ["day", "week", "quarter", "year"]) {

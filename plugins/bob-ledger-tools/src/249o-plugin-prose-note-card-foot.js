@@ -101,12 +101,13 @@ class BobLedgerToolsProseNoteCardFootMixin {
   proseNoteCardFootExtra(path, model) {
     const spec = this.proseNoteCardFootSpec(path, model)
       || { path: proseNoteCardPath(path), inventory: propertyCardFootAdapterPendingInventory(), stamp: null };
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "prose");
   }
 
   proseNoteCardFootHandlers(path) {
     const filePath = proseNoteCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "prose",
       pendingScroll: this.proseNoteCardFootPendingScroll,
       refresh: () => this.scheduleProseNoteCardRefresh(),
       hoverSource: "bob-prose-note-card",
@@ -117,7 +118,7 @@ class BobLedgerToolsProseNoteCardFootMixin {
   }
 
   proseNoteCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.proseNoteCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.proseNoteCardFootTracked, "prose");
   }
 
   proseNoteCardAppendFoot(card, path, model, doc, footSpec, options = {}) {
@@ -133,6 +134,7 @@ class BobLedgerToolsProseNoteCardFootMixin {
       this.proseNoteCardFootPendingScroll,
       {
         plugin: this,
+        species: "prose",
         view: options?.view || null,
         component: options?.component || this,
         source: options?.sourceText,

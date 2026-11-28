@@ -251,7 +251,7 @@ test("schema model preserves declaration and choice order; empty and invalid rou
   assert.equal(helpers.albumHeaderIsAlbumSource("---\ntype: [[project]]\n---"), false);
 });
 
-test("broken schema remains visible and disables the capture route with its diagnostic", () => {
+test("broken schema stays closed and disables the capture route with its diagnostic", () => {
   const { app, plugin, doc } = fixture(album({
     noun: null,
     fields: undefined,
@@ -268,10 +268,10 @@ test("broken schema remains visible and disables the capture route with its diag
   const button = root.querySelector(".bob-album-header-copy");
   assert.equal(button.disabled, true);
   assert.match(root.querySelector(".bob-album-schema-summary").textContent, /record\.fields is invalid/);
-  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
   assert.equal(schemaHead(root).querySelector(".bob-cabinet-attention").textContent, "✗1 problem");
   assert.equal(root.querySelector(".bob-album-schema-empty"), null);
-  assert.equal(root.querySelector(".bob-album-schema-issue").textContent, "record.fields is invalid");
+  assert.equal(root.querySelector(".bob-album-schema-issue"), null);
 });
 
 test("schema fold choices follow blocking issue signatures; warnings only add attention", () => {
@@ -283,8 +283,8 @@ test("schema fold choices follow blocking issue signatures; warnings only add at
   plugin.albumHeaderSetExpanded("eat.md", false, signature);
   assert.equal(plugin.albumHeaderIsExpanded("eat.md", broken), false,
     "an explicit choice for the current problem signature works");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md", changed), true,
-    "a changed blocking message resurfaces the fold");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md", changed), false,
+    "a changed problem keeps a closed Schema closed (header branch)");
 
   const warning = { schemaInvalid: false, issues: [{ severity: "warning", message: "unusual field" }] };
   plugin.albumHeaderSetExpanded("eat.md", false, "");
@@ -570,7 +570,7 @@ test("healthy schema cabinet starts closed and opens per album in view state", (
   assert.notEqual(other.querySelector(".bob-album-schema-summary").getAttribute("aria-controls"), bodyId,
     "two panes never reuse the body id");
   assert.equal(helpers.propertyCardCabinetDefaultOpen("schema", { problems: "" }), false);
-  assert.equal(helpers.propertyCardCabinetDefaultOpen("schema", { problems: "schema-invalid" }), true);
+  assert.equal(helpers.propertyCardCabinetDefaultOpen("schema", { problems: "schema-invalid" }), false);
   assert.equal(helpers.propertyCardFoldResolve({ problems: "schema-invalid", foldDefault: false }), true);
   const model = { fields: [{}], records: 1, noun: "restaurant", singular: "restaurant", groupingClause: "", datedNotes: false };
   assert.equal(helpers.albumHeaderFoldText(model), "Schema · 1 field · 1 restaurant");

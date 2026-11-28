@@ -37,7 +37,7 @@ test("the registry carries the notebook and prose species", () => {
   });
   assert.deepEqual(H.propertyCardSpecies("prose"), {
     kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow",
-    band: "", temporal: false, foldDefault: false,
+    band: "", temporal: false,
   });
   assert.equal(H.propertyCardAccessibleName("notebook", "Dev tools"), "Notebook: Dev tools");
   assert.equal(H.propertyCardAccessibleName("prose", ""), "Prose");

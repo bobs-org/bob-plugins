@@ -10,17 +10,17 @@ const PROPERTY_CARD_KINDS = Object.freeze([
 ]);
 
 const PROPERTY_CARD_SPECIES = Object.freeze({
-  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true }),
+  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
   record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true }),
   day: Object.freeze({ kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true }),
   week: Object.freeze({ kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true }),
   quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
   year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
-  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false }),
+  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
   area: Object.freeze({ kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true }),
   project: Object.freeze({ kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true }),
   notebook: Object.freeze({ kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true }),
-  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false }),
+  prose: Object.freeze({ kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false }),
   ref: Object.freeze({ kind: "ref", word: "Ref", tile: "ribbon", icon: "bookmark", band: "", temporal: false, foldDefault: true }),
 });
 

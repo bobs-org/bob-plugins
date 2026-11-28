@@ -118,17 +118,17 @@ test("registry covers twelve frozen species with presentation and fold defaults"
   assert.equal(H.PROPERTY_CARD_KIND_ATTR, "data-card-kind");
   assert.deepEqual([...H.PROPERTY_CARD_KINDS], ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose", "ref"]);
   const expected = {
-    album: { kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false, foldDefault: true },
+    album: { kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false },
     record: { kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false, foldDefault: true },
     day: { kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true },
     week: { kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true },
     quarter: { kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true },
     year: { kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true },
-    bank: { kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false, foldDefault: false },
+    bank: { kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false },
     area: { kind: "area", word: "Area", tile: "field", icon: "layers", band: "", temporal: false, foldDefault: true },
     project: { kind: "project", word: "Project", tile: "pennant", icon: "target", band: "", temporal: false, foldDefault: true },
     notebook: { kind: "notebook", word: "Notebook", tile: "spine", icon: "notebook-tabs", band: "", temporal: false, foldDefault: true },
-    prose: { kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false, foldDefault: false },
+    prose: { kind: "prose", word: "Prose", tile: "folio", icon: "pilcrow", band: "", temporal: false },
     ref: { kind: "ref", word: "Ref", tile: "ribbon", icon: "bookmark", band: "", temporal: false, foldDefault: true },
   };
   for (const kind of H.PROPERTY_CARD_KINDS) {

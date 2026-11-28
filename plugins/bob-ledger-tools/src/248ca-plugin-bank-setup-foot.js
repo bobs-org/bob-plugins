@@ -105,12 +105,13 @@ class BobLedgerToolsBankSetupFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "bank");
   }
 
   bankSetupFootHandlers(path) {
     const filePath = bankSetupHubPath(path) || BANK_SETUP_HUB_PATH;
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "bank",
       pendingScroll: this.bankSetupFootPendingScroll,
       refresh: () => this.scheduleBankSetupRefresh(),
       hoverSource: "bob-bank-setup",
@@ -134,7 +135,7 @@ class BobLedgerToolsBankSetupFootMixin {
   }
 
   bankSetupTrackFoot(container, path, header) {
-    return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked);
+    return propertyCardFootAdapterTrack(container, path, header, this.bankSetupFootTracked, "bank");
   }
 
   bankSetupAppendFoot(header, path, doc, footSpec, options = {}) {
@@ -146,6 +147,7 @@ class BobLedgerToolsBankSetupFootMixin {
       this.bankSetupFootHandlers(filePath), this.bankSetupFootPendingScroll,
       {
         plugin: this,
+        species: "bank",
         view: options?.view || null,
         component: options?.component || this,
         source: options?.sourceText,

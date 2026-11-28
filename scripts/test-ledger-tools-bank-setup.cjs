@@ -994,7 +994,7 @@ test("setup header rests collapsed when healthy and toggles per hub in view stat
   plugin.teardownBankSetup();
 });
 
-test("invalid setup opens by default, holds an explicit collapse, and resurfaces on new findings", () => {
+test("invalid setup stays closed, holds an explicit open, and keeps it on new findings", () => {
   const plugin = makeSetupPlugin(null, {});
   plugin.setupBankSetup();
   const invalid = decodedReport({
@@ -1005,10 +1005,10 @@ test("invalid setup opens by default, holds an explicit collapse, and resurfaces
   seedReport(plugin, invalid);
   const { el, preview } = hubSurface();
   plugin.paintBankSetupReading(el, "bank.md");
-  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
+  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
   plugin.bankSetupToggleExpanded("bank.md");
   plugin.paintBankSetupReading(el, "bank.md");
-  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(preview.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
   const changed = decodedReport({
     ok: false,
     state: "invalid",

@@ -140,17 +140,17 @@ test("frozen kinds use canonical order and bottom-up contiguous numbering", () =
   assert.deepEqual(H.propertyCardCabinetNumbering(["schema", "records"]), [
     { kind: "records", number: 2 }, { kind: "schema", number: 1 },
   ]);
-  assert.equal(H.propertyCardCabinetDefaultOpen("records"), true);
+  assert.equal(H.propertyCardCabinetDefaultOpen("records"), false);
   assert.equal(H.propertyCardCabinetDefaultOpen("areas"), false);
   assert.equal(H.propertyCardCabinetDefaultOpen("schema"), false);
-  assert.equal(H.propertyCardCabinetDefaultOpen("schema", { problems: "needs repair" }), true);
+  assert.equal(H.propertyCardCabinetDefaultOpen("schema", { problems: "needs repair" }), false);
   assert.equal(H.propertyCardCabinetNumbering(["areas", "projects", "notebooks", "albums"]).some((row) => row.number === "q"), false);
 });
 
 test("content state carries by path and kind across rename and prunes on delete", () => {
   H.propertyCardCabinetStateResetForTests();
   assert.equal(H.propertyCardCabinetIsOpen("./Areas\\work.md", "areas"), false);
-  assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas", { problems: "damaged" }), true);
+  assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas", { problems: "damaged" }), false);
   H.propertyCardCabinetSetOpen("Areas/work.md", "areas", false, { problems: "damaged" });
   assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas", { problems: "damaged" }), false);
   assert.equal(H.propertyCardCabinetIsOpen("Areas/work.md", "areas"), false);
@@ -160,7 +160,7 @@ test("content state carries by path and kind across rename and prunes on delete"
   assert.equal(H.propertyCardCabinetIsOpen("Areas/renamed.md", "records"), true);
   assert.equal(H.propertyCardCabinetOpenStates.has("Areas/work.md\u0000areas"), false);
   assert.equal(H.propertyCardCabinetReleasePath("Areas/renamed.md"), true);
-  assert.equal(H.propertyCardCabinetIsOpen("Areas/renamed.md", "records"), true);
+  assert.equal(H.propertyCardCabinetIsOpen("Areas/renamed.md", "records"), false);
   assert.equal(H.propertyCardCabinetOpenStates.has("Areas/renamed.md\u0000records"), false);
 });
 

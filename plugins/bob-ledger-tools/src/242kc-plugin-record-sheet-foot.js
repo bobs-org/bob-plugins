@@ -86,7 +86,7 @@ class BobLedgerToolsRecordSheetFootMixin {
     }
     let open = false;
     try {
-      open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+      open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, "record");
     } catch (_) {}
     return { footOpen: open, footDigest: this.recordSheetFootDigest(spec), footSpec: spec };
   }
@@ -118,8 +118,8 @@ class BobLedgerToolsRecordSheetFootMixin {
         let decided = next;
         try {
           if (typeof propertyCardFootToggle === "function") {
-            propertyCardFootToggle(notePath);
-            decided = propertyCardFootIsOpen(notePath);
+            propertyCardFootToggle(notePath, "record");
+            decided = propertyCardFootIsOpen(notePath, "record");
           }
         } catch (_) {}
         if (decided === true) {
@@ -178,7 +178,7 @@ class BobLedgerToolsRecordSheetFootMixin {
           : null;
         const drawerId = drawer?.getAttribute?.("id") || "";
         const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
-        return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+        return propertyCardFootRegisterMount(foot, key, disclosureId || undefined, "record");
       }
     } catch (_) {}
     return null;
@@ -193,7 +193,7 @@ class BobLedgerToolsRecordSheetFootMixin {
       const path = recordSheetPath(options?.sourcePath || model?.identity?.path || model?.path);
       if (!sheet || !path || typeof propertyCardFootBuildEl !== "function") return null;
       const spec = footSpec || this.recordSheetFootSpec(path, model && model.identity ? model : null);
-      const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+      const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, "record");
       let disclosureId = "";
       try {
         disclosureId = typeof propertyCardFootNextDisclosureId === "function"

@@ -143,12 +143,13 @@ class BobLedgerToolsRefNoteCardFootMixin {
   refNoteCardFootExtra(path, model) {
     const spec = this.refNoteCardFootSpec(path, model)
       || { path: refNoteCardPath(path), inventory: propertyCardFootAdapterPendingInventory(), stamp: null };
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "ref");
   }
 
   refNoteCardFootHandlers(path) {
     const filePath = refNoteCardPath(path);
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species: "ref",
       pendingScroll: this.refNoteCardFootPendingScroll,
       refresh: () => this.scheduleRefNoteCardRefresh?.(),
       hoverSource: "bob-ref-card",
@@ -159,7 +160,7 @@ class BobLedgerToolsRefNoteCardFootMixin {
   }
 
   refNoteCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.refNoteCardFootTracked);
+    return propertyCardFootAdapterTrack(container, path, card, this.refNoteCardFootTracked, "ref");
   }
 
   refNoteCardAppendFoot(card, path, model, doc, footSpec, options = {}) {
@@ -173,6 +174,7 @@ class BobLedgerToolsRefNoteCardFootMixin {
       options.keyLive === true ? { ...spec, keyLive: true } : spec,
       this.refNoteCardFootHandlers(key),
       this.refNoteCardFootPendingScroll,
+      { species: "ref" },
     );
     if (!built?.element) return built;
     const lint = doc.createElement("span");

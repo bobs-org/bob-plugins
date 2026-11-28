@@ -987,7 +987,7 @@ async function run(args) {
     let probe = await openAndProbe(client, lib.PATHS.album, "live");
     const recordsPanel = probe.panels.find((row) => row.kind === "records");
     const schemaPanel = probe.panels.find((row) => row.kind === "schema");
-    check("album-records-open-schema-closed", recordsPanel?.expanded === true && schemaPanel?.expanded === false,
+    check("album-records-closed-schema-closed", recordsPanel?.expanded === false && schemaPanel?.expanded === false,
       { records: recordsPanel, schema: schemaPanel });
     probe = await openAndProbe(client, lib.PATHS.bank, "live");
     check("bank-setup-default-closed", probe.panels.find((row) => row.kind === "setup")?.expanded === false, probe.panels);
@@ -1000,7 +1000,7 @@ async function run(args) {
     const projectPanel = probe.panels.find((row) => row.kind === "projects");
     check("project-64-line-summary-and-attention", Boolean(projectPanel && (projectPanel.summary || projectPanel.attention)), projectPanel);
 
-    // Perf: the 106-record album (Records open by default) and the 64-row
+    // Perf: the 106-record album (Records closed by default) and the 64-row
     // Projects host with its Projects cabinet open. The cabinet-vs-inline 2x
     // budget needed the closed gate, so it retired at switch-on; acceptance's
     // retained GO evidence (bob-cli-qq.8) holds it. Each cabinet body must

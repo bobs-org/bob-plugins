@@ -194,9 +194,11 @@ class BobLedgerToolsHomeCardFootMixin {
     return extra;
   }
 
-  homeCardFootHandlers(path) {
+  homeCardFootHandlers(path, model) {
     const filePath = homeCardPath(path);
+    const species = (model && (model.kind || model.species)) || "";
     return propertyCardFootAdapterHandlers(this, filePath, {
+      species,
       pendingScroll: this.homeCardFootPendingScroll,
       refresh: () => this.scheduleHomeCardRefresh(),
       hoverSource: "bob-home-card",
@@ -210,8 +212,9 @@ class BobLedgerToolsHomeCardFootMixin {
     });
   }
 
-  homeCardTrackFoot(container, path, card) {
-    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked);
+  homeCardTrackFoot(container, path, card, model) {
+    const species = (model && (model.kind || model.species)) || "";
+    return propertyCardFootAdapterTrack(container, path, card, this.homeCardFootTracked, species || undefined);
   }
 
   // Append the shared foot after content, outside the collapsible body.
@@ -219,12 +222,14 @@ class BobLedgerToolsHomeCardFootMixin {
     const key = homeCardPath(path);
     if (!card || !key) return null;
     const spec = footSpec || this.homeCardFootSpec(key, model);
+    const species = (model && (model.kind || model.species)) || spec?.species || spec?.kind || "";
     return propertyCardFootAdapterAppend(
       card, key, doc,
       spec && options?.keyLive === true ? { ...spec, keyLive: true } : spec,
-      this.homeCardFootHandlers(key), this.homeCardFootPendingScroll,
+      this.homeCardFootHandlers(key, model), this.homeCardFootPendingScroll,
       {
         plugin: this,
+        species: species || undefined,
         view: options?.view || null,
         readingScope: options?.readingScope || null,
         component: options?.component || this,

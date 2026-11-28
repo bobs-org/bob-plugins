@@ -23,34 +23,70 @@ const propertyCardFootPathResolvers = [];
 let propertyCardFootMountSeq = 0;
 let propertyCardFootEditorHook = null;
 
-function propertyCardFootIsOpen(path) {
+function propertyCardFootSpeciesOf(value, fallback) {
+  try {
+    if (typeof value === "string" && value) return value;
+    if (value && typeof value === "object" && typeof value.species === "string" && value.species) {
+      return value.species;
+    }
+  } catch (_) {}
+  try {
+    if (typeof fallback === "string" && fallback) return fallback;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootConfiguredOpen(species, options) {
+  try {
+    if (typeof propertyCardCabinetConfiguredOpen === "function") {
+      return propertyCardCabinetConfiguredOpen(species, "properties", options || {}) === true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function propertyCardFootIsOpen(path, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
-  return propertyCardFootOpenStates.get(key) === true;
+  const effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+  const loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  if (propertyCardFootOpenStates.has(key)) {
+    return propertyCardFootOpenStates.get(key) === true;
+  }
+  return propertyCardFootConfiguredOpen(effectiveSpecies, loaderOptions);
 }
 
 // Flip open state for one path and notify adapter listeners so the affected
 // mounts repaint. Returns the new open state.
-function propertyCardFootToggle(path) {
+function propertyCardFootToggle(path, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
-  const next = propertyCardFootOpenStates.get(key) !== true;
-  if (next) propertyCardFootOpenStates.set(key, true);
-  else propertyCardFootOpenStates.delete(key);
+  const effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+  const loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  const next = !(propertyCardFootIsOpen(key, effectiveSpecies, loaderOptions) === true);
+  propertyCardFootOpenStates.set(key, next);
   for (const listener of Array.from(propertyCardFootToggleListeners)) {
     try { listener(key, next); } catch (_) {}
   }
   return next;
 }
 
-function propertyCardFootSetOpen(path, open) {
+function propertyCardFootSetOpen(path, open, species, options) {
   const key = propertyCardFootPath(path);
   if (!key) return false;
+  let effectiveSpecies = "";
+  let loaderOptions = {};
+  if (typeof species === "string" || (species && typeof species === "object")) {
+    effectiveSpecies = propertyCardFootSpeciesOf(species, options && options.species);
+    loaderOptions = (species && typeof species === "object" ? species : options) || {};
+  } else if (species !== undefined) {
+    loaderOptions = species || {};
+    effectiveSpecies = propertyCardFootSpeciesOf(loaderOptions, undefined);
+  }
   const next = open === true;
-  const current = propertyCardFootOpenStates.get(key) === true;
+  const current = propertyCardFootIsOpen(key, effectiveSpecies, loaderOptions);
+  propertyCardFootOpenStates.set(key, next);
   if (current === next) return next;
-  if (next) propertyCardFootOpenStates.set(key, true);
-  else propertyCardFootOpenStates.delete(key);
   for (const listener of Array.from(propertyCardFootToggleListeners)) {
     try { listener(key, next); } catch (_) {}
   }
@@ -73,18 +109,41 @@ function propertyCardFootNextDisclosureId() {
   return `bob-property-foot-${propertyCardFootMountSeq}`;
 }
 
-function propertyCardFootRegisterMount(node, path, disclosureId) {
+function propertyCardFootNormalizeMountSpecies(value) {
+  try {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootRegisterMount(node, path, disclosureId, species) {
   const key = propertyCardFootPath(path);
   if (!node || !key) return null;
+  let disclosure = disclosureId;
+  let mountSpecies = propertyCardFootNormalizeMountSpecies(species);
+  if (!mountSpecies && typeof disclosure === "string") {
+    const trimmed = disclosure.trim();
+    const lower = trimmed.toLowerCase();
+    const known = ["album", "record", "day", "week", "quarter", "year", "bank", "area", "project", "notebook", "prose", "article", "ref", "all"];
+    if (trimmed && known.includes(lower) && !trimmed.startsWith("bob-property") && !trimmed.startsWith("foot-")) {
+      mountSpecies = trimmed;
+      disclosure = undefined;
+    }
+  }
+  if (disclosure && typeof disclosure === "object" && !mountSpecies) {
+    try { mountSpecies = propertyCardFootNormalizeMountSpecies(disclosure.species); } catch (_) {}
+    disclosure = disclosure.disclosureId;
+  }
   const existing = propertyCardFootMountByNode.get(node);
   if (existing && propertyCardFootMounts.has(existing.id)) {
     existing.path = key;
-    if (disclosureId) existing.disclosureId = disclosureId;
+    if (disclosure) existing.disclosureId = disclosure;
+    if (mountSpecies) existing.species = mountSpecies;
     return { id: existing.id, disclosureId: existing.disclosureId };
   }
   propertyCardFootMountSeq += 1;
   const id = `foot-${propertyCardFootMountSeq}`;
-  const entry = { id, node, path: key, disclosureId: disclosureId || `bob-property-foot-${propertyCardFootMountSeq}` };
+  const entry = { id, node, path: key, disclosureId: disclosure || `bob-property-foot-${propertyCardFootMountSeq}`, species: mountSpecies || "" };
   propertyCardFootMounts.set(id, entry);
   try { propertyCardFootMountByNode.set(node, entry); } catch (_) {}
   return { id: entry.id, disclosureId: entry.disclosureId };
@@ -159,8 +218,8 @@ function propertyCardFootRenamePath(oldPath, newPath) {
   const from = propertyCardFootPath(oldPath);
   const to = propertyCardFootPath(newPath);
   if (!from || !to || from === to) return false;
-  if (propertyCardFootOpenStates.get(from) === true) {
-    propertyCardFootOpenStates.set(to, true);
+  if (propertyCardFootOpenStates.has(from)) {
+    propertyCardFootOpenStates.set(to, propertyCardFootOpenStates.get(from) === true);
   }
   propertyCardFootOpenStates.delete(from);
   for (const entry of propertyCardFootMounts.values()) {
@@ -324,11 +383,33 @@ function propertyCardCanToggleProperties(view) {
 // disconnected, and mounts from a previous file carry its old path, so
 // neither can act. Open state is per path, so every live mount of the note
 // (including a second pane) follows one toggle. Returns whether it acted.
-function propertyCardToggleProperties(view) {
+function propertyCardFootSpeciesForView(view, path) {
+  try {
+    const key = propertyCardFootPath(path);
+    if (!view || !key) return "";
+    for (const entry of propertyCardFootLiveMountsFor(key)) {
+      try {
+        if (entry.species && propertyCardFootViewContains(view, entry.node)) return entry.species;
+      } catch (_) {}
+    }
+    for (const entry of propertyCardFootLiveMountsFor(key)) {
+      try {
+        if (entry.species) return entry.species;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardToggleProperties(view, species) {
   try {
     if (!propertyCardCanToggleProperties(view)) return false;
     const path = propertyCardFootViewPath(view);
-    propertyCardFootToggle(path);
+    let effective = "";
+    try {
+      effective = propertyCardFootSpeciesOf(species, propertyCardFootSpeciesForView(view, path));
+    } catch (_) {}
+    propertyCardFootToggle(path, effective);
     return true;
   } catch (_) {
     return false;

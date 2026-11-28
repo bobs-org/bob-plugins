@@ -30,14 +30,17 @@ function propertyCardCabinetIsOpen(path, kind, options = {}) {
   if (!spec || spec.role !== "content" || !key) return propertyCardCabinetDefaultOpen(kind, options);
   let choice = null;
   try {
+    const stored = propertyCardCabinetOpenStates.get(key);
     choice = typeof propertyCardFoldChoiceFromStored === "function"
-      ? propertyCardFoldChoiceFromStored(propertyCardCabinetOpenStates.get(key))
+      ? propertyCardFoldChoiceFromStored(stored)
       : null;
+    if (!choice && stored && typeof stored === "object" && typeof stored.open === "boolean") {
+      choice = stored;
+    }
   } catch (_) {}
-  const problems = propertyCardCabinetProblemSignature(options.problems);
   try {
     const restamped = typeof propertyCardFoldRestamp === "function"
-      ? propertyCardFoldRestamp(choice, problems)
+      ? propertyCardFoldRestamp(choice, "")
       : choice;
     if (restamped && restamped !== choice) {
       propertyCardCabinetOpenStates.set(key, restamped);
@@ -48,7 +51,7 @@ function propertyCardCabinetIsOpen(path, kind, options = {}) {
     if (typeof propertyCardFoldResolve === "function") {
       return propertyCardFoldResolve({
         choice,
-        problems,
+        problems: "",
         foldDefault: propertyCardCabinetDefaultOpen(kind, options),
       }) === true;
     }
@@ -62,11 +65,10 @@ function propertyCardCabinetSetOpen(path, kind, open, options = {}) {
   if (!spec || spec.role !== "content" || !key) return false;
   const normalized = propertyCardCabinetPath(path);
   const next = open === true;
-  const problems = propertyCardCabinetProblemSignature(options.problems);
   const previous = propertyCardCabinetOpenStates.get(key);
   const choice = typeof propertyCardFoldChoice === "function"
-    ? propertyCardFoldChoice(next, problems)
-    : { open: next, problems };
+    ? propertyCardFoldChoice(next, "")
+    : { open: next, problems: "" };
   if (previous?.open === choice.open && previous?.problems === choice.problems) return next;
   propertyCardCabinetOpenStates.set(key, choice);
   for (const listener of Array.from(propertyCardCabinetStateListeners)) {

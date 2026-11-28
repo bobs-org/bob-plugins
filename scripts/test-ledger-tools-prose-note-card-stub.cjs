@@ -112,7 +112,7 @@ function miniDocument() {
 test("the prose kit seeds agree with the family and keep the file stem verbatim", () => {
   assert.equal(H.PROSE_NOTE_CARD_KIND, "prose");
   assert.equal(H.propertyCardSpecies(H.PROSE_NOTE_CARD_KIND).tile, "folio");
-  assert.equal(H.propertyCardSpecies(H.PROSE_NOTE_CARD_KIND).foldDefault, false);
+  assert.equal(Object.hasOwn(H.propertyCardSpecies(H.PROSE_NOTE_CARD_KIND), "foldDefault"), false);
   assert.equal(H.PROSE_NOTE_CARD_HOST_KIND, "prose");
   assert.equal(H.PROSE_NOTE_CARD_MOUNT_ATTR, "data-prose-source");
   assert.equal(H.PROSE_NOTE_CARD_SURFACE_CLASS, "bob-prose-note-card");

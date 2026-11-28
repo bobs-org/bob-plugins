@@ -94,11 +94,12 @@ class BobLedgerToolsAlbumHeaderFootMixin {
         stamp: null,
       };
     }
-    return propertyCardFootAdapterExtra(path, spec);
+    return propertyCardFootAdapterExtra(path, spec, "album");
   }
 
   albumHeaderFootHandlers(path) {
     return propertyCardFootAdapterHandlers(this, path, {
+      species: "album",
       pendingScroll: this.albumHeaderFootPendingScroll,
       refresh: () => this.scheduleAlbumHeaderRefresh(),
       hoverSource: "bob-album-header",
@@ -116,7 +117,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
   }
 
   albumHeaderTrackFoot(container, path, header) {
-    return propertyCardFootAdapterTrack(container, path, header, this.albumHeaderFootTracked);
+    return propertyCardFootAdapterTrack(container, path, header, this.albumHeaderFootTracked, "album");
   }
 
   albumHeaderAppendFoot(header, card, options, doc) {
@@ -128,6 +129,7 @@ class BobLedgerToolsAlbumHeaderFootMixin {
       this.albumHeaderFootHandlers(path), this.albumHeaderFootPendingScroll,
       {
         plugin: this,
+        species: "album",
         view: options?.view || null,
         readingScope: options?.readingScope || null,
         component: options?.component || this,

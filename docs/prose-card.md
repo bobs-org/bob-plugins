@@ -34,7 +34,7 @@ If Bob Prose is absent, disabled, or exposes an older API, the card stays
 identity-only and hides the measure row. With API v1 loaded, the row reserves
 its height while a snapshot is pending. A refusal shows Bob's message instead
 of empty measures. The foot lint chip counts Bob's findings. The Outline [cabinet](cabinets.md) is closed
-by default; `_` or a `to write` chip expands a bounded outline, followed by
+by default unless `cabinets:` opens it; `_` or a `to write` chip expands a bounded outline, followed by
 findings. Outline rows show Bob's number only when numbering is on, the
 de-numbered title, and `≈ words` or `to write`. A jump checks Bob's saved line
 against the current buffer heading, then pairs by order with metadata-cache

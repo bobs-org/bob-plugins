@@ -152,7 +152,9 @@ function propertyCardFootAdapterSpec(options = {}) {
   } catch (_) {
     stamp = null;
   }
-  return { path, inventory, stamp, contractIssues, firstSetting };
+  const kind = typeof options.kind === "string" ? options.kind : "";
+  const species = typeof options.species === "string" && options.species ? options.species : kind;
+  return { path, inventory, stamp, contractIssues, firstSetting, kind, species };
 }
 
 function propertyCardFootAdapterDigest(spec) {
@@ -187,10 +189,25 @@ function propertyCardFootAdapterDigest(spec) {
   }
 }
 
-function propertyCardFootAdapterExtra(path, spec) {
+function propertyCardFootAdapterSpeciesOf(value, fallback) {
+  try {
+    if (typeof value === "string" && value) return value;
+    if (value && typeof value === "object" && typeof value.species === "string" && value.species) {
+      return value.species;
+    }
+  } catch (_) {}
+  try {
+    if (typeof fallback === "string" && fallback) return fallback;
+  } catch (_) {}
+  return "";
+}
+
+function propertyCardFootAdapterExtra(path, spec, species) {
   let open = false;
   try {
-    open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path);
+    const fromSpec = spec && (spec.species || spec.kind);
+    const effective = propertyCardFootAdapterSpeciesOf(species, fromSpec);
+    open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(path, effective);
   } catch (_) {}
   return { footOpen: open, footDigest: propertyCardFootAdapterDigest(spec), footSpec: spec };
 }
@@ -238,13 +255,14 @@ function propertyCardFootAdapterHoverLink(plugin, event, targetEl, linktext, sou
 function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   const refresh = typeof options.refresh === "function" ? options.refresh : () => {};
   const pending = options.pendingScroll;
+  const species = propertyCardFootAdapterSpeciesOf(options.species, options.kind);
   return {
     onToggle: (notePath, next) => {
       let decided = next;
       try {
         if (typeof propertyCardFootToggle === "function") {
-          propertyCardFootToggle(notePath);
-          decided = propertyCardFootIsOpen(notePath);
+          propertyCardFootToggle(notePath, species);
+          decided = propertyCardFootIsOpen(notePath, species);
         }
       } catch (_) {}
       if (decided === true && pending instanceof Set) pending.add(propertyCardFootAdapterPath(notePath));
@@ -276,7 +294,7 @@ function propertyCardFootAdapterHandlers(plugin, path, options = {}) {
   };
 }
 
-function propertyCardFootAdapterTrack(container, path, card, tracked) {
+function propertyCardFootAdapterTrack(container, path, card, tracked, species) {
   const key = propertyCardFootAdapterPath(path);
   try {
     if (typeof propertyCardFootReleaseScope === "function") {
@@ -285,6 +303,18 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
   } catch (_) {}
   if (!card || !key) return null;
   if (tracked instanceof Set) tracked.add(key);
+  let mountSpecies = propertyCardFootAdapterSpeciesOf(species, undefined);
+  try {
+    if (!mountSpecies && tracked && typeof tracked === "object" && typeof tracked.species === "string") {
+      mountSpecies = tracked.species;
+    }
+  } catch (_) {}
+  try {
+    if (!mountSpecies && card && typeof card.getAttribute === "function") {
+      const fromCard = card.getAttribute("data-card-kind") || card.getAttribute("data-card-species") || "";
+      if (fromCard) mountSpecies = String(fromCard);
+    }
+  } catch (_) {}
   let foot = null;
   try {
     foot = typeof card.querySelector === "function"
@@ -301,7 +331,7 @@ function propertyCardFootAdapterTrack(container, path, card, tracked) {
         : null;
       const drawerId = drawer?.getAttribute?.("id") || "";
       const disclosureId = drawerId.endsWith("-drawer") ? drawerId.slice(0, -"-drawer".length) : "";
-      return propertyCardFootRegisterMount(foot, key, disclosureId || undefined);
+      return propertyCardFootRegisterMount(foot, key, disclosureId || undefined, mountSpecies || undefined);
     }
   } catch (_) {}
   return null;
@@ -311,7 +341,15 @@ function propertyCardFootAdapterAppend(card, path, doc, spec, handlers, pendingS
   try {
     const key = propertyCardFootAdapterPath(path);
     if (!card || !key || typeof propertyCardFootBuildEl !== "function") return null;
-    const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(key);
+    const fromSpec = spec && (spec.species || spec.kind);
+    let fromCard = "";
+    try {
+      if (card && typeof card.getAttribute === "function") {
+        fromCard = card.getAttribute("data-card-kind") || "";
+      }
+    } catch (_) {}
+    const species = propertyCardFootAdapterSpeciesOf(context && context.species, fromSpec || fromCard);
+    const open = typeof propertyCardFootIsOpen === "function" && propertyCardFootIsOpen(key, species);
     let disclosureId = "";
     try {
       disclosureId = typeof propertyCardFootNextDisclosureId === "function"

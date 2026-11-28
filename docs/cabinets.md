@@ -72,9 +72,11 @@ released on unmount, file change, mode change, and unload.
 
 Fail-open is total: Source mode, embeds, hover previews, canvas, print,
 mobile, a failed mount, uncertain evidence, and any denied context show the
-stored section in the same frame. Painting, toggling, arming, picking,
-cancelling, and the footer overlay never write the vault or spawn bob; only
-an explicit **Sync** click invokes Bob's existing writer.
+stored section in the same frame. Heading links (`[[note#Projects]]`,
+`#Records`) and the Outline pane open the matching cabinet, and a Find hit
+inside a hidden range reveals the stored source. Painting, toggling, arming,
+picking, cancelling, and the footer overlay never write the vault or spawn
+bob; only an explicit **Sync** click invokes Bob's existing writer.
 
 ## Keys
 

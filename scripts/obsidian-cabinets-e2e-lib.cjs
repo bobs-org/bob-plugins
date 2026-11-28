@@ -128,7 +128,8 @@ function fixtureNotes() {
     [PATHS.singleArea]: areaNote({ title: "Single Catalog", catalogs: "## Projects\n\n" + callout("projects", ["**[[sase|SASE]]** — one direct item."]) }),
     [PATHS.album]: records.albumNote({ title: "Eat", parent: "cash", noun: "restaurant", fields: recordFields,
       extra: "## Records\n\n" + callout("records", Array.from({ length: 106 }, (_, i) =>
-        `**[[eat/place-${String(i + 1).padStart(3, "0")}|Place ${String(i + 1).padStart(3, "0")}]]**`)) }),
+        `**[[eat/place-${String(i + 1).padStart(3, "0")}|Place ${String(i + 1).padStart(3, "0")}]]**`))
+        + "\n[[eat#Records|Jump to Records]]\n" }),
     [PATHS.emptyAlbum]: records.albumNote({ title: "Empty", parent: "cash", noun: "spot", fields: { status: "{values: {to_try: To try}}" } }),
     [PATHS.subscriptions]: records.albumNote({ title: "Subscriptions", parent: "bank", noun: "subscription", fields: {
       status: "{required: true, values: {active: Active, cancelled: Cancelled}}",
@@ -186,6 +187,9 @@ function screenshotNeeds() {
   result.push("area-live-light-wide-reduced-motion");
   result.push("area-live-light-wide-forced-colors");
   result.push("area-source-light-wide");
+  result.push("find-strict-inside-reveals-stored-source");
+  result.push("outline-pane-reveals-cabinet");
+  result.push("records-link-reveals-cabinet");
   return result;
 }
 
@@ -252,7 +256,9 @@ function selfTest() {
   assert.match(notes[PATHS.duplicate], /## Projects[\s\S]*## Projects/);
   assert.ok(notes["cabinet-context.canvas"]);
   assert.equal(SPECS.length, 16);
-  assert.equal(screenshotNeeds().length, 67);
+  assert.equal(screenshotNeeds().length, 70);
+  assert.match(notes[PATHS.album], /\[\[eat#Records\|Jump to Records\]\]/);
+  assert.match(notes[PATHS.area], /Project catalog sentinel/);
   assert.equal(new Set(screenshotNeeds()).size, screenshotNeeds().length);
   assert.deepEqual(parseArgs(["-e", "/x/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "-s"]), {
     executable: "/x/obsidian", out: "/tmp/shots", report: "/tmp/report.json", reloadLoop: 0, selfTest: true, help: false,

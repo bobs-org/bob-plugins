@@ -765,9 +765,11 @@ Cabinets are always on, so the runner is gate-free: it seeds no plugin data,
 never opens the live vault, and puts a refusing `bob` shim first on `PATH`. The
 report records every Live Preview and Reading species, keyboard and fail-open
 checks (Source mode, embeds, hover, print, a forced mount error, and plugin
-disable), content parity of each cabinet body against the stored callout rows
-in the note's bytes, cabinet paint timings, markdown hashes, unexpected Bob
-spawns, and each captured screenshot's hash and dimensions. The
+disable), Find strict-inside reveal of a hidden catalog, Outline-pane reveal
+of Projects and Records, same-note `#Records` heading-link reveal, content
+parity of each cabinet body against the stored callout rows in the note's
+bytes, cabinet paint timings, markdown hashes, unexpected Bob spawns, and
+each captured screenshot's hash and dimensions. The
 cabinet-vs-inline perf budget needed the closed preview gate, so it retired at
 go-live; the acceptance GO evidence on `bob-cli-qq.8` holds it.
 

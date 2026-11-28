@@ -75264,6 +75264,12 @@ const PROPERTY_CARD_HOST_CATALOG_HEADINGS = Object.freeze({
   notebooks: "Notebooks",
   albums: "Albums",
 });
+// Heading-navigation kinds: host catalogs plus Records. Records is not a
+// host provider; its claim.reveal still reaches cabinetRecordsReveal.
+const PROPERTY_CARD_NAVIGATION_HEADINGS = Object.freeze({
+  ...PROPERTY_CARD_HOST_CATALOG_HEADINGS,
+  records: "Records",
+});
 
 function propertyCardCabinetHostReportState(plugin, kind) {
   try {
@@ -75807,8 +75813,8 @@ function propertyCardCabinetHostRevealNavigation(plugin, event) {
     if (href.includes("#")) heading = href.slice(href.indexOf("#") + 1).split("|")[0];
     else if (target.closest?.(".outline")) heading = target.textContent || "";
     try { heading = decodeURIComponent(heading).replace(/^#+/, "").trim(); } catch (_) {}
-    const kind = Object.keys(PROPERTY_CARD_HOST_CATALOG_HEADINGS)
-      .find((candidate) => PROPERTY_CARD_HOST_CATALOG_HEADINGS[candidate].toLowerCase() === heading.toLowerCase());
+    const kind = Object.keys(PROPERTY_CARD_NAVIGATION_HEADINGS)
+      .find((candidate) => PROPERTY_CARD_NAVIGATION_HEADINGS[candidate].toLowerCase() === heading.toLowerCase());
     if (!kind) return false;
     if (href.includes("#")) {
       const noteTarget = href.slice(0, href.indexOf("#")).trim();
@@ -220818,6 +220824,7 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       PROPERTY_CARD_HOST_CATALOG_KINDS,
       PROPERTY_CARD_HOST_CATALOG_HEADINGS,
+      PROPERTY_CARD_NAVIGATION_HEADINGS,
       propertyCardCabinetHostSourceCounts,
       propertyCardCabinetHostReportTally,
       propertyCardCabinetHostApply,

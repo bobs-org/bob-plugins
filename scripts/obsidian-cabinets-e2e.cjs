@@ -313,7 +313,7 @@ function installVault(vault, profileDir) {
   for (const id of PLUGIN_IDS) copyPlugin(vault, id);
   fs.writeFileSync(path.join(obsidian, "community-plugins.json"), JSON.stringify(PLUGIN_IDS, null, 2) + "\n");
   fs.writeFileSync(path.join(obsidian, "core-plugins.json"), JSON.stringify([
-    "file-explorer", "global-search", "switcher", "page-preview", "command-palette", "properties", "canvas",
+    "file-explorer", "global-search", "switcher", "page-preview", "command-palette", "outline", "properties", "canvas",
   ], null, 2) + "\n");
   fs.writeFileSync(path.join(obsidian, "app.json"), JSON.stringify({
     livePreview: true, showInlineTitle: true, propertiesInDocument: "visible", readableLineLength: true,
@@ -631,6 +631,167 @@ async function resetPanels(client) {
   }
   probe.resetFailure = "One or more active-view cabinets stayed open after three close attempts";
   return probe;
+}
+
+const FIND_INSIDE_SENTINEL = "Project catalog sentinel";
+
+function absorbFindProbeSource() {
+  return `(() => {
+    const view = app.workspace.activeLeaf?.view;
+    const cm = view?.editor?.cm;
+    const editor = view?.editor;
+    const doc = editor?.getValue?.() || cm?.state?.doc?.toString?.() || "";
+    const sel = cm?.state?.selection?.main || null;
+    const heading = doc.indexOf("## Projects");
+    const sentinelAt = doc.indexOf(${JSON.stringify(FIND_INSIDE_SENTINEL)});
+    const callout = doc.indexOf("> [!projects]");
+    let rangeTo = -1;
+    if (callout >= 0) {
+      const rest = doc.slice(callout);
+      const endRel = rest.search(/\\n(?!>)/);
+      rangeTo = endRel < 0 ? doc.length : callout + endRel;
+    }
+    const range = heading >= 0 && rangeTo > heading ? { from: heading, to: rangeTo } : null;
+    const from = sel ? Math.min(sel.anchor ?? sel.from, sel.head ?? sel.to) : null;
+    const to = sel ? Math.max(sel.anchor ?? sel.from, sel.head ?? sel.to) : null;
+    const strictlyInside = Boolean(range && from != null && from > range.from && to < range.to);
+    const visibleLines = Array.from(cm?.dom?.querySelectorAll?.(".cm-line") || []).filter((node) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    }).map((node) => String(node.textContent || ""));
+    const rawVisible = visibleLines.some((line) => line.includes(${JSON.stringify(FIND_INSIDE_SENTINEL)}))
+      && visibleLines.some((line) => line.includes("[!projects]"));
+    const cursor = document.querySelector(".cm-vimCursorLayer .cm-fat-cursor.cm-cursor-primary, .cm-cursor-primary");
+    const cursorRect = cursor?.getBoundingClientRect?.();
+    const cursorStyle = cursor ? getComputedStyle(cursor) : null;
+    const cursorVisible = Boolean(cursor && cursorRect && cursorRect.width > 0 && cursorRect.height > 0
+      && cursorStyle.display !== "none" && cursorStyle.visibility !== "hidden");
+    return {
+      path: view?.file?.path || null,
+      heading, sentinelAt, callout, range,
+      sel: sel ? { from: sel.from, to: sel.to, anchor: sel.anchor, head: sel.head } : null,
+      strictlyInside, rawVisible, cursorVisible,
+    };
+  })()`;
+}
+
+async function findInEditor(client, query) {
+  const opened = await client.evaluate(`app.commands.executeCommandById("editor:open-search")`);
+  await sleep(250);
+  const focused = await client.evaluate(`(() => {
+    const inputs = Array.from(document.querySelectorAll("input"));
+    const input = document.querySelector(".document-search-container input, .cm-textfield")
+      || inputs.find((node) => /search|find/i.test((node.placeholder || "") + " " + (node.className || "") + " " + (node.getAttribute("aria-label") || "")));
+    if (!input) return { ok: false, inputs: inputs.slice(0, 8).map((node) => ({
+      placeholder: node.placeholder, className: String(node.className || ""), aria: node.getAttribute("aria-label"),
+    })) };
+    input.focus();
+    if (typeof input.select === "function") input.select();
+    return { ok: true, className: String(input.className || "") };
+  })()`);
+  if (focused?.ok) {
+    await client.call("Input.insertText", { text: query });
+    await sleep(80);
+    await client.call("Input.dispatchKeyEvent", {
+      type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    });
+    await client.call("Input.dispatchKeyEvent", {
+      type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    });
+    await sleep(280);
+  }
+  return { opened, focused };
+}
+
+async function closeEditorSearch(client) {
+  await client.call("Input.dispatchKeyEvent", {
+    type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27,
+  });
+  await client.call("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27,
+  });
+  await sleep(120);
+}
+
+async function placeEditorOnNeedle(client, needle) {
+  return client.evaluate(`(() => {
+    const view = app.workspace.activeLeaf?.view;
+    const editor = view?.editor;
+    const text = editor?.getValue?.() || "";
+    const index = text.indexOf(${JSON.stringify(needle)});
+    if (!editor || index < 0) return false;
+    const line = text.slice(0, index).split("\\n").length - 1;
+    editor.setCursor({ line, ch: 0 });
+    editor.cm?.contentDOM?.focus?.();
+    return true;
+  })()`);
+}
+
+async function openOutlinePane(client) {
+  await client.evaluate(`(() => { app.workspace.rightSplit?.expand?.(); return true; })()`);
+  return client.evaluate(`(async () => {
+    const ran = app.commands.executeCommandById("outline:open");
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const items = Array.from(document.querySelectorAll('.workspace-leaf-content[data-type="outline"] .tree-item-self'))
+      .map((node) => String(node.textContent || "").trim());
+    return { ran, items };
+  })()`);
+}
+
+async function clickOutlineHeading(client, label) {
+  const point = await settleEvaluate(client, `(() => {
+    const node = Array.from(document.querySelectorAll('.workspace-leaf-content[data-type="outline"] .tree-item-self, .workspace-leaf-content[data-type="outline"] .tree-item-inner'))
+      .find((item) => String(item.textContent || "").trim() === ${JSON.stringify(label)});
+    if (!node) return null;
+    node.scrollIntoView({ block: "nearest" });
+    const rect = node.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height,
+      text: String(node.textContent || "").trim() };
+  })()`, (value) => Boolean(value && value.width > 0), 5_000);
+  if (!point) throw new Error("Outline has no " + label + " item");
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await sleep(350);
+  return point;
+}
+
+async function closeOutlinePane(client) {
+  await client.evaluate(`(() => {
+    for (const leaf of app.workspace.getLeavesOfType("outline") || []) leaf.detach();
+    app.workspace.rightSplit?.collapse?.();
+    return true;
+  })()`);
+  await sleep(200);
+}
+
+function cabinetHeadViewportSource(kind) {
+  return `(() => {
+    const view = app.workspace.activeLeaf?.view;
+    const root = view?.previewMode?.containerEl || view?.contentEl || view?.containerEl;
+    const panel = root?.querySelector?.(${JSON.stringify(`[data-cabinet-kind="${kind}"]`)});
+    const head = panel?.querySelector?.(".bob-cabinet-head") || panel?.querySelector?.(".bob-cabinet-toggle");
+    if (!head) return { found: false, expanded: false, inViewport: false };
+    const rect = head.getBoundingClientRect();
+    const inViewport = rect.height > 0 && rect.width > 0 && rect.top >= 0 && rect.bottom <= window.innerHeight + 1;
+    return {
+      found: true,
+      expanded: panel.querySelector(".bob-cabinet-toggle")?.getAttribute("aria-expanded") === "true",
+      inViewport,
+      rect: { top: rect.top, bottom: rect.bottom, height: rect.height, width: rect.width },
+    };
+  })()`;
+}
+
+async function captureCheckShot(client, outDir, report, name, mode) {
+  await shared.setViewport(client, 1400);
+  await shared.setTheme(client, "light");
+  const shot = await shared.capture(client, outDir, name, 1400, "light", mode);
+  shot.captureFailures = [];
+  shot.visualVerdict = "pending visual review";
+  report.screenshots.push(shot);
+  return shot;
 }
 
 async function setMode(client, notePath, mode) {
@@ -1299,6 +1460,82 @@ async function run(args) {
       && hoverDismissed && navigationClick?.href?.includes("#Projects") && navigationClick.defaultPrevented === true
       && probe.panels.find((row) => row.kind === "projects")?.expanded === true,
     { navigationTarget, hoverDismissed, navigationClick, probe });
+
+    // Find a unique token strictly inside the absorbed Projects range, then leave it.
+    await openAndProbe(client, lib.PATHS.area, "live");
+    const findErrorsBefore = report.consoleErrors.length;
+    const findOpened = await findInEditor(client, FIND_INSIDE_SENTINEL);
+    const findInside = await settleEvaluate(client, absorbFindProbeSource(), (value) =>
+      value?.path === lib.PATHS.area && value.strictlyInside && value.rawVisible && value.cursorVisible, 5_000);
+    await captureCheckShot(client, outDir, report, "find-strict-inside-reveals-stored-source", "live");
+    await closeEditorSearch(client);
+    const leftFind = await placeEditorOnNeedle(client, "Cash area body sentinel");
+    const findLeft = await settleEvaluate(client, absorbFindProbeSource(), (value) =>
+      value?.path === lib.PATHS.area && value.strictlyInside === false && value.rawVisible === false, 5_000);
+    check("find-strict-inside-reveals-stored-source", Boolean(findOpened?.focused?.ok)
+      && findInside?.strictlyInside === true && findInside?.rawVisible === true && findInside?.cursorVisible === true
+      && leftFind === true && findLeft?.strictlyInside === false && findLeft?.rawVisible === false
+      && report.consoleErrors.length === findErrorsBefore,
+    { findOpened, findInside, leftFind, findLeft, consoleErrors: report.consoleErrors.length - findErrorsBefore });
+
+    const outlineReveal = async (notePath, heading, kind, mode) => {
+      await openAndProbe(client, notePath, mode);
+      await resetPanels(client);
+      const opened = await openOutlinePane(client);
+      const click = opened?.items?.includes(heading) ? await clickOutlineHeading(client, heading) : null;
+      probe = await settleProbe(client, (value) => value?.path === notePath
+        && value?.panels?.find((row) => row.kind === kind)?.expanded === true,
+      `outline ${heading} revealed ${kind} in ${mode}`, 5_000);
+      const head = await client.evaluate(cabinetHeadViewportSource(kind));
+      return { mode, opened, click, expanded: probe.panels.find((row) => row.kind === kind)?.expanded === true, head };
+    };
+    const outlineProjectsReading = await outlineReveal(lib.PATHS.area, "Projects", "projects", "reading");
+    const outlineProjectsLive = await outlineReveal(lib.PATHS.area, "Projects", "projects", "live");
+    const outlineRecordsReading = await outlineReveal(lib.PATHS.album, "Records", "records", "reading");
+    const outlineRecordsLive = await outlineReveal(lib.PATHS.album, "Records", "records", "live");
+    await captureCheckShot(client, outDir, report, "outline-pane-reveals-cabinet", "reading");
+    await closeOutlinePane(client);
+    const outlineOk = [outlineProjectsReading, outlineProjectsLive, outlineRecordsReading, outlineRecordsLive]
+      .every((row) => row.expanded && row.head?.found && row.head?.inViewport);
+    check("outline-pane-reveals-cabinet", outlineOk,
+      { outlineProjectsReading, outlineProjectsLive, outlineRecordsReading, outlineRecordsLive });
+
+    await openAndProbe(client, lib.PATHS.album, "reading");
+    await resetPanels(client);
+    const recordsTarget = await client.evaluate(`(() => {
+      const view = app.workspace.activeLeaf?.view;
+      const root = view?.previewMode?.containerEl || view?.containerEl;
+      const link = Array.from(root?.querySelectorAll?.("a.internal-link") || []).find((node) =>
+        (node.getAttribute("href") || "").includes("#Records") && String(node.textContent || "").includes("Jump to Records"));
+      return link ? { href: link.getAttribute("href"), text: String(link.textContent || "").trim() } : null;
+    })()`);
+    await client.evaluate(`(() => {
+      window.__bobCabinetRecordsClick = null;
+      document.addEventListener("click", (event) => {
+        const origin = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+        const link = origin?.closest?.("a.internal-link, a[data-href]");
+        const href = link?.getAttribute?.("data-href") || link?.getAttribute?.("href") || "";
+        if (!href.includes("#Records")) return;
+        window.__bobCabinetRecordsClick = {
+          href, text: String(link.textContent || "").trim(), defaultPrevented: event.defaultPrevented,
+        };
+      }, true);
+      return true;
+    })()`);
+    if (recordsTarget) await clickSelector(client, 'a.internal-link[href*="#Records"]');
+    const recordsClick = await client.evaluate("window.__bobCabinetRecordsClick || null");
+    probe = await settleProbe(client, (value) => value?.path === lib.PATHS.album
+      && value?.panels?.find((row) => row.kind === "records")?.expanded === true,
+    "same-note heading link revealed the Records cabinet", 5_000);
+    const recordsHead = await client.evaluate(cabinetHeadViewportSource("records"));
+    await captureCheckShot(client, outDir, report, "records-link-reveals-cabinet", "reading");
+    check("records-link-reveals-cabinet", Boolean(recordsTarget) && probe.path === lib.PATHS.album
+      && recordsClick?.href?.includes("#Records") && recordsClick.defaultPrevented === true
+      && probe.panels.find((row) => row.kind === "records")?.expanded === true
+      && recordsHead?.found === true && recordsHead?.inViewport === true,
+    { recordsTarget, recordsClick, recordsHead, probe });
+
+    await openAndProbe(client, lib.PATHS.area, "reading");
     await client.call("Emulation.setEmulatedMedia", { media: "print" });
     await sleep(250);
     const printText = await client.evaluate(`(() => ({

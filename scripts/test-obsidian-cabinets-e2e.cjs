@@ -38,6 +38,7 @@ test("fixtures cover every property-card species and high-content catalogs", () 
   for (const spec of lib.SPECS) assert.ok(notes[spec.path], spec.key);
   assert.equal(lib.countCatalogRows(notes[lib.PATHS.project], "Projects"), 64);
   assert.equal(lib.countCatalogRows(notes[lib.PATHS.album], "Records"), 106);
+  assert.match(notes[lib.PATHS.album], /\[\[eat#Records\|Jump to Records\]\]/);
   assert.match(notes[lib.PATHS.area], /\[!areas\]/);
   assert.match(notes[lib.PATHS.area], /\[!projects\]/);
   assert.match(notes[lib.PATHS.area], /\[!notebooks\]/);
@@ -47,7 +48,7 @@ test("fixtures cover every property-card species and high-content catalogs", () 
 
 test("screenshot inventory covers the full theme, width, mode, and state matrix", () => {
   const needs = lib.screenshotNeeds();
-  assert.equal(needs.length, 67);
+  assert.equal(needs.length, 70);
   assert.equal(new Set(needs).size, needs.length);
   for (const name of [
     "area-live-light-narrow", "area-reading-dark-wide", "area-live-dark-narrow-armed",
@@ -55,6 +56,8 @@ test("screenshot inventory covers the full theme, width, mode, and state matrix"
     "prose-live-dark-narrow", "record-reading-dark-wide", "footer-live-light-wide-armed",
     "area-live-light-wide-reduced-motion", "area-live-light-wide-forced-colors",
     "ref-live-light-wide", "ref-reading-dark-narrow", "area-source-light-wide",
+    "find-strict-inside-reveals-stored-source", "outline-pane-reveals-cabinet",
+    "records-link-reveals-cabinet",
   ]) assert.ok(needs.includes(name), name);
 });
 
@@ -76,6 +79,8 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
     "passive-actions-zero-markdown-writes", "screenshot-matrix-captured",
     "reading-reload-loop-zero-misses", "reading-hides-album-records-section",
     "live-preview-hides-album-records-section-after-reading",
+    "find-strict-inside-reveals-stored-source", "outline-pane-reveals-cabinet",
+    "records-link-reveals-cabinet",
     "pick-overlay-whole-in-window", "armed footer overlay is not whole inside the window",
   ]) assert.ok(source.includes(check), `runner includes ${check}`);
   assert.match(source, /runReadingReloadLoop/);
@@ -94,6 +99,8 @@ test("browser probe is valid and runner covers acceptance-critical interactions"
   // check must then say it relied on computed print styles, never claim a PDF.
   assert.match(source, /evidenceMode: pdfAvailable \? "generated-pdf-text" : "computed-print-styles"/);
   assert.match(source, /collapseSidebars\(client\)/);
+  assert.match(source, /"outline"/);
+  assert.match(source, /editor:open-search/);
   assert.doesNotMatch(source, /TMPDIR:\s*["']\/tmp["']/);
 });
 

@@ -4,6 +4,7 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       PROPERTY_CARD_HOST_CATALOG_KINDS,
       PROPERTY_CARD_HOST_CATALOG_HEADINGS,
+      PROPERTY_CARD_NAVIGATION_HEADINGS,
       propertyCardCabinetHostSourceCounts,
       propertyCardCabinetHostReportTally,
       propertyCardCabinetHostApply,

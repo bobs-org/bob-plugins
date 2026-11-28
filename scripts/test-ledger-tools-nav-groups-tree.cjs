@@ -272,9 +272,12 @@ test("worked example: ]N tours families in outline order, wrapping", () => {
   assert.equal(bar.nextGroup.path, "alpha.md");
   assert.equal(bar.nextGroup.groupLabel, "goo");
   assert.equal(bar.nextGroup.landingLabel, "alpha");
+  assert.equal(bar.nextGroup.shortLabel, "goo", "a compact group arm names the parent, not the landing");
   assert.equal(bar.prevGroup.path, "foo.md");
   assert.equal(bar.prevGroup.groupLabel, "pig");
   assert.equal(bar.prevGroup.landingLabel, "foo");
+  assert.equal(bar.prevGroup.shortLabel, "pig");
+  assert.equal(bar.step.next.shortLabel, "baz", "step stops keep the landing as their short label");
 
   const beta = harnessed.plugin.navGroupsResolve({ path: "beta.md" });
   assert.equal(beta.nextGroup.path, "foo.md");

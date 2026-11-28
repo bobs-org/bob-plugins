@@ -322,19 +322,33 @@ async function runE2e(args) {
     ].join("\n"));
     check("tree index builds", result.perf.indexBuild.built, result.perf.indexBuild);
 
+    const STOPS = ["prev", "next", "prevGroup", "nextGroup"];
     for (const spec of TREE_CASES) {
       await open(spec.path, "live");
-      const probe = await harness.waitFor(client, surfaceProbe(),
-        (value) => value?.rail && value?.floor && value.footer?.panel === "links",
-        spec.kind + " rail, footer, and floor");
-      for (const name of ["prev", "next", "prevGroup", "nextGroup"]) {
+      // The footer and rail repaint asynchronously after the note opens, and
+      // the footer's last view can still describe the previous note (or a
+      // transient empty/unavailable state). Wait until both surfaces have
+      // settled on this note's stops; the checks below still assert each one
+      // and a timeout reports the last observed frame.
+      let probe = null;
+      try {
+        probe = await harness.waitFor(client, surfaceProbe(),
+          (value) => value?.rail && value?.floor && value.footer?.panel === "links" &&
+            STOPS.every((name) => value.rail[name]?.target === spec[name].replace(/\.md$/i, "") &&
+              value.footer[name]?.path === spec[name]),
+          spec.kind + " rail, footer, and floor");
+      } catch (_) {
+        probe = await client.evaluate(surfaceProbe());
+      }
+      assert.ok(probe?.rail && probe?.floor && probe?.footer, spec.kind + " start probe: " + JSON.stringify(probe));
+      for (const name of STOPS) {
         const expected = spec[name];
         const actualRail = probe.rail[name]?.target;
         const actualFooter = probe.footer[name]?.path;
         check(spec.kind + " rail " + name + " matches the walk",
           actualRail === expected.replace(/\.md$/i, ""), { expected, actual: actualRail });
         check(spec.kind + " footer " + name + " matches the walk",
-          actualFooter === expected, { expected, actual: actualFooter });
+          actualFooter === expected, { expected, actual: actualFooter ?? null, footer: probe.footer });
       }
       check(spec.kind + " rail is the card floor", probe.floor.last, probe.floor);
       result[spec.kind + "Start"] = probe;
@@ -429,6 +443,27 @@ async function runE2e(args) {
       sameAfterLane && lane.lane === "closed" && closedRail.rail.next.target === "projects/closed_gooa",
       { lane: lane.lane, rail: closedRail.rail, sameCard: sameAfterLane });
 
+    // Undo the live-update edits so the floor checks and review captures see
+    // the canonical fixture (baz open under foo, beta under its own name).
+    await client.evaluate([
+      "(async () => { const file = app.vault.getAbstractFileByPath('projects/baz.md');",
+      "const text = await app.vault.cachedRead(file);",
+      "await app.vault.modify(file, text.replace('parent: \"[[projects/goo]]\"', 'parent: \"[[projects/foo]]\"').replace('- [x] #task', '- [ ] #task'));",
+      "const renamed = app.vault.getAbstractFileByPath('projects/beta_renamed.md');",
+      "if (renamed) await app.fileManager.renameFile(renamed, 'projects/beta.md'); })()",
+    ].join("\n"));
+    const restored = await harness.waitFor(client, activeTreeAnswer("projects/baz.md"),
+      (answer) => answer?.group?.parentPath === "projects/foo.md" && answer?.lane === "open" &&
+        answer?.step?.prev?.path === "projects/bar.md" && answer?.step?.next?.path === "projects/bop.md",
+      "fixture restore");
+    const restoredRail = await harness.waitFor(client, surfaceProbe(),
+      (value) => value?.rail?.prev?.target === "projects/bar" && value?.rail?.next?.target === "projects/bop",
+      "restored rail");
+    const betaBack = await client.evaluate("Boolean(app.vault.getAbstractFileByPath('projects/beta.md'))");
+    check("fixture restored after live updates",
+      restored.lane === "open" && betaBack,
+      { group: restored.group?.parentPath, lane: restored.lane, betaBack, rail: restoredRail.rail });
+
     await open("areas/goo.md", "live");
     await harness.waitFor(client, surfaceProbe(), (value) => value?.rail && value?.floor, "passivity rail ready");
     fs.writeFileSync(spawnLog, "");
@@ -497,6 +532,16 @@ async function runE2e(args) {
           await shared.setTheme(client, theme);
           const ready = await harness.waitFor(client, surfaceProbe(), (value) => value?.rail && value?.floor?.last,
             spec.kind + " " + mode + " " + theme + " screenshot");
+          if (theme === "light") {
+            // The narrow (≤ 28rem) group arms must still name the parents the
+            // wide rail named, not the landing notes.
+            const plain = (text) => String(text || "").replace(/↺/g, "").replace(/\s+/g, " ").trim();
+            const start = result[spec.kind + "Start"].rail;
+            const narrow = { prev: plain(ready.rail.prevGroup?.text), next: plain(ready.rail.nextGroup?.text) };
+            const wide = { prev: plain(start.prevGroup?.text), next: plain(start.nextGroup?.text) };
+            check(spec.kind + " " + mode + " narrow group arms name the parents",
+              narrow.prev === wide.prev && narrow.next === wide.next, { narrow, wide });
+          }
           const focused = await client.evaluate([
             "(() => { const root = " + SURFACE + ";",
             "const item = root?.querySelector('.bob-link-walk-rail .bob-property-card-rail-item[data-rail=\"next\"]') ||",
@@ -691,7 +736,17 @@ async function runE2e(args) {
     if (child.exitCode === null && child.signalCode === null) await Promise.race([exited, harness.sleep(2_000)]);
     result.screenshots = result.screenshots.map((shot) => ({ ...shot, path: path.resolve(shot.path) }));
     buildReport(args.report, result);
-    fs.rmSync(scratch, { recursive: true, force: true });
+    // Obsidian helpers can still flush the profile after SIGTERM; retry the
+    // scratch removal and never let teardown turn a finished run into a crash.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        break;
+      } catch (error) {
+        if (attempt === 2) process.stderr.write("scratch cleanup left " + scratch + ": " + String(error.message || error) + "\n");
+        else await harness.sleep(1_000);
+      }
+    }
   }
   return result;
 }

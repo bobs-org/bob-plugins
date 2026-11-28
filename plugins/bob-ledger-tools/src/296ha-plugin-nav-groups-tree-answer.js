@@ -19,13 +19,16 @@ function navGroupsTreeParentLabel(nodes, node) {
   return "Top level";
 }
 
-function navGroupsTreeStop({ path, groupLabel, landingLabel, wraps }) {
+// shortLabel is the arm's narrow name: the landing on step and parent stops,
+// the group's parent label on group stops (like the calendar and record
+// routes), so a compact rail or footer arm still names the parent.
+function navGroupsTreeStop({ path, groupLabel, landingLabel, wraps, group = false }) {
   return Object.freeze({
     path,
     target: navGroupsTarget(path),
     groupLabel,
     landingLabel,
-    shortLabel: landingLabel,
+    shortLabel: group === true ? groupLabel : landingLabel,
     state: "exists",
     ghostReason: null,
     wraps: wraps === true,
@@ -186,12 +189,14 @@ function navGroupsTreeAnswerFor(tables, path) {
         groupLabel: prevLabel,
         landingLabel: prevFirst.label,
         wraps: tourIndex === 0,
+        group: true,
       });
       nextGroup = navGroupsTreeStop({
         path: nextFirst.path,
         groupLabel: nextLabel,
         landingLabel: nextFirst.label,
         wraps: tourIndex === count - 1,
+        group: true,
       });
     }
     const members = Object.freeze(ring.map((member) => Object.freeze({

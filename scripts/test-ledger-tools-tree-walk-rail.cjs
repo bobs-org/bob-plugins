@@ -35,14 +35,16 @@ try {
 
 const H = LedgerToolsPlugin.helpers;
 
-function treeStop(path, { groupLabel = "bob", landingLabel = null, wraps = false, source = "tree", state = "exists" } = {}) {
+// Mirrors the provider: step and parent stops carry the landing as their
+// short label; group stops (group: true) carry the parent label.
+function treeStop(path, { groupLabel = "bob", landingLabel = null, wraps = false, source = "tree", state = "exists", group = false } = {}) {
   const landing = landingLabel || path.replace(/\.md$/i, "").split("/").pop();
   return Object.freeze({
     path,
     target: path.replace(/\.md$/i, ""),
     groupLabel,
     landingLabel: landing,
-    shortLabel: landing,
+    shortLabel: group ? groupLabel : landing,
     state,
     ghostReason: null,
     wraps,
@@ -83,8 +85,8 @@ function treeProvider({ kind = "project", lane = "open", parentLabel = "bob", pa
       enteringNext: null,
       enteringPrev: null,
     }),
-    prevGroup: prevGroup === null ? null : treeStop("alpha.md", { groupLabel: "pig", landingLabel: "alpha" }),
-    nextGroup: nextGroup === null ? null : treeStop("beta.md", { groupLabel: "goo", landingLabel: "beta" }),
+    prevGroup: prevGroup === null ? null : treeStop("alpha.md", { groupLabel: "pig", landingLabel: "alpha", group: true }),
+    nextGroup: nextGroup === null ? null : treeStop("beta.md", { groupLabel: "goo", landingLabel: "beta", group: true }),
     none: null,
   });
 }
@@ -142,6 +144,9 @@ test("disclosure: full rail when the ring and the tour both have two or more", (
   assert.equal(model.group.center.text, "PROJECT · bob · 2 of 3 open");
   assert.equal(model.step.next.tooltip, "]n · next: bob_plugins");
   assert.equal(model.group.next.tooltip, "]N · next: goo's projects → beta");
+  // The narrow (≤ 28rem) arm label names the parent, like the wide one.
+  assert.equal(model.group.prev.shortLabel, "pig");
+  assert.equal(model.group.next.shortLabel, "goo");
 });
 
 test("disclosure: ticks-only centre when the tour has one group", () => {

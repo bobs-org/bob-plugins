@@ -129,7 +129,7 @@ function fixtureNotes() {
     [PATHS.album]: records.albumNote({ title: "Eat", parent: "cash", noun: "restaurant", fields: recordFields,
       extra: "## Records\n\n" + callout("records", Array.from({ length: 106 }, (_, i) =>
         `**[[eat/place-${String(i + 1).padStart(3, "0")}|Place ${String(i + 1).padStart(3, "0")}]]**`))
-        + "\n[[eat#Records|Jump to Records]]\n" }),
+        + "\n## Notes\n\n[[eat#Records|Jump to Records]]\n" }),
     [PATHS.emptyAlbum]: records.albumNote({ title: "Empty", parent: "cash", noun: "spot", fields: { status: "{values: {to_try: To try}}" } }),
     [PATHS.subscriptions]: records.albumNote({ title: "Subscriptions", parent: "bank", noun: "subscription", fields: {
       status: "{required: true, values: {active: Active, cancelled: Cancelled}}",
@@ -257,7 +257,8 @@ function selfTest() {
   assert.ok(notes["cabinet-context.canvas"]);
   assert.equal(SPECS.length, 16);
   assert.equal(screenshotNeeds().length, 70);
-  assert.match(notes[PATHS.album], /\[\[eat#Records\|Jump to Records\]\]/);
+  assert.match(notes[PATHS.album], /## Notes\s*\n+\[\[eat#Records\|Jump to Records\]\]/);
+  assert.doesNotMatch(notes[PATHS.album].split("## Notes")[0], /\[\[eat#Records/);
   assert.match(notes[PATHS.area], /Project catalog sentinel/);
   assert.equal(new Set(screenshotNeeds()).size, screenshotNeeds().length);
   assert.deepEqual(parseArgs(["-e", "/x/obsidian", "-o", "/tmp/shots", "-r", "/tmp/report.json", "-s"]), {

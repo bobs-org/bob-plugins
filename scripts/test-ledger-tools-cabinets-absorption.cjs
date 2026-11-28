@@ -120,6 +120,7 @@ const {
   propertyCardCabinetSelectionStrictlyInside,
   propertyCardCabinetAbsorbFieldReduce,
   propertyCardCabinetAbsorbFieldDecorations,
+  propertyCardCabinetAbsorbSearchPanelOpen,
   propertyCardCabinetAbsorbAtomicRanges,
   propertyCardCabinetAbsorbAtomicRangeSet,
   propertyCardCabinetAbsorbShouldReveal,
@@ -529,6 +530,17 @@ test("editor: rungs default to atomic and select bare replace", () => {
   assert.equal(absorb("replace").claim.rung, "replace");
   assert.equal(propertyCardCabinetAbsorbAtomicRanges(absorb(undefined)).length, 1, "rung b maps the cursor around the span");
   assert.deepEqual(propertyCardCabinetAbsorbAtomicRanges(absorb("replace")), [], "rung a leaves bare replace decorations");
+});
+
+test("editor: Find search panel is detected so atomic ranges can lift", () => {
+  assert.equal(propertyCardCabinetAbsorbSearchPanelOpen(null), false);
+  assert.equal(propertyCardCabinetAbsorbSearchPanelOpen({}), false);
+  const closed = { querySelector: () => null };
+  assert.equal(propertyCardCabinetAbsorbSearchPanelOpen({ contentDOM: { ownerDocument: closed } }), false);
+  const open = {
+    querySelector: (selector) => String(selector).includes("document-search-container") ? { className: "document-search-container" } : null,
+  };
+  assert.equal(propertyCardCabinetAbsorbSearchPanelOpen({ dom: { ownerDocument: open } }), true);
 });
 
 test("editor: atomicRanges hands CodeMirror a RangeSet, never a plain array", () => {

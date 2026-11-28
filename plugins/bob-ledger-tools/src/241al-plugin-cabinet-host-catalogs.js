@@ -543,20 +543,70 @@ function propertyCardCabinetHostMountClaim(kind, plugin, context = {}) {
   }
 }
 
+// Obsidian's Outline pane is `.workspace-leaf-content[data-type="outline"]`.
+// The older `.outline` class remains for unit stubs.
+const PROPERTY_CARD_NAVIGATION_OUTLINE_ROOT = ".workspace-leaf-content[data-type=\"outline\"], .outline";
+
+function propertyCardCabinetNavigationOutlineRoot(node) {
+  try {
+    return node?.closest?.(PROPERTY_CARD_NAVIGATION_OUTLINE_ROOT) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetNavigationClickTarget(origin) {
+  try {
+    const link = origin?.closest?.("a.internal-link, a[data-href]");
+    if (link) return link;
+    const item = origin?.closest?.(".tree-item-self, .tree-item-inner");
+    if (!item || !propertyCardCabinetNavigationOutlineRoot(item)) return null;
+    return item;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardCabinetNavigationHeading(target, href) {
+  let heading = "";
+  try {
+    if (href.includes("#")) heading = href.slice(href.indexOf("#") + 1).split("|")[0];
+    else if (propertyCardCabinetNavigationOutlineRoot(target)) {
+      const inner = target.matches?.(".tree-item-inner") ? target : target.querySelector?.(".tree-item-inner");
+      heading = String((inner || target).textContent || "");
+    }
+    heading = decodeURIComponent(heading).replace(/^#+/, "").trim();
+  } catch (_) {
+    heading = String(heading || "").replace(/^#+/, "").trim();
+  }
+  return heading;
+}
+
+function propertyCardCabinetNavigationMarkdownView(plugin) {
+  try {
+    const MarkdownViewCtor = require("obsidian").MarkdownView;
+    const workspace = plugin?.app?.workspace;
+    const active = workspace?.getActiveViewOfType?.(MarkdownViewCtor);
+    if (active?.file?.path) return active;
+    for (const leaf of workspace?.getLeavesOfType?.("markdown") || []) {
+      if (leaf?.view?.file?.path) return leaf.view;
+    }
+    return active || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function propertyCardCabinetHostRevealNavigation(plugin, event) {
   try {
     const origin = event?.target?.nodeType === 1 ? event.target : event?.target?.parentElement;
-    const target = origin?.closest?.("a.internal-link, a[data-href], .outline .tree-item-self, .outline .tree-item-inner");
+    const target = propertyCardCabinetNavigationClickTarget(origin);
     if (!target) return false;
-    const MarkdownViewCtor = require("obsidian").MarkdownView;
-    const active = plugin?.app?.workspace?.getActiveViewOfType?.(MarkdownViewCtor);
+    const active = propertyCardCabinetNavigationMarkdownView(plugin);
     const activePath = String(active?.file?.path || "");
     if (!activePath) return false;
-    let heading = "";
     const href = target.getAttribute?.("data-href") || target.getAttribute?.("href") || "";
-    if (href.includes("#")) heading = href.slice(href.indexOf("#") + 1).split("|")[0];
-    else if (target.closest?.(".outline")) heading = target.textContent || "";
-    try { heading = decodeURIComponent(heading).replace(/^#+/, "").trim(); } catch (_) {}
+    const heading = propertyCardCabinetNavigationHeading(target, href);
     const kind = Object.keys(PROPERTY_CARD_NAVIGATION_HEADINGS)
       .find((candidate) => PROPERTY_CARD_NAVIGATION_HEADINGS[candidate].toLowerCase() === heading.toLowerCase());
     if (!kind) return false;

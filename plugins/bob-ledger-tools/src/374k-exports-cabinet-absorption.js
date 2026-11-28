@@ -28,6 +28,7 @@ try {
       propertyCardCabinetSelectionStrictlyInside,
       propertyCardCabinetAbsorbFieldReduce,
       propertyCardCabinetAbsorbFieldDecorations,
+      propertyCardCabinetAbsorbSearchPanelOpen,
       propertyCardCabinetAbsorbAtomicRanges,
       propertyCardCabinetAbsorbAtomicRangeSet,
       propertyCardCabinetAbsorbShouldReveal,

@@ -222,6 +222,21 @@ function propertyCardCabinetAbsorbFieldDecorations(value) {
   }
 }
 
+// Obsidian Find (`editor:open-search`) and CodeMirror's search panel must be
+// able to place the selection strictly inside a hidden span so 240wg can
+// reveal the stored source. Atomic ranges would bounce that selection to the
+// boundary (which never reveals), so they lift while a search panel is open.
+function propertyCardCabinetAbsorbSearchPanelOpen(view) {
+  try {
+    const root = view?.dom || view?.contentDOM;
+    const doc = root?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!doc || typeof doc.querySelector !== "function") return false;
+    return Boolean(doc.querySelector(".document-search-container, .cm-panel.cm-search"));
+  } catch (_) {
+    return false;
+  }
+}
+
 // Atomic ranges for the same hidden spans (ladder rung b): the cursor maps
 // around them, so Vim motion never lands inside a replaced range. Rung
 // "replace" (ladder rung a) skips them, so the spike can measure the bare
@@ -280,6 +295,9 @@ function propertyCardCabinetAbsorbEditorExtension() {
         if (EditorView.atomicRanges && typeof EditorView.atomicRanges.of === "function") {
           extensions.push(EditorView.atomicRanges.of((view) => {
             try {
+              if (propertyCardCabinetAbsorbSearchPanelOpen(view)) {
+                return propertyCardCabinetAbsorbAtomicRangeSet([]);
+              }
               return propertyCardCabinetAbsorbAtomicRangeSet(
                 propertyCardCabinetAbsorbAtomicRanges(view.state.field(defined, false)),
               );

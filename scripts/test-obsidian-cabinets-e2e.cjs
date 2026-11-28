@@ -38,7 +38,7 @@ test("fixtures cover every property-card species and high-content catalogs", () 
   for (const spec of lib.SPECS) assert.ok(notes[spec.path], spec.key);
   assert.equal(lib.countCatalogRows(notes[lib.PATHS.project], "Projects"), 64);
   assert.equal(lib.countCatalogRows(notes[lib.PATHS.album], "Records"), 106);
-  assert.match(notes[lib.PATHS.album], /\[\[eat#Records\|Jump to Records\]\]/);
+  assert.match(notes[lib.PATHS.album], /## Notes\s*\n+\[\[eat#Records\|Jump to Records\]\]/);
   assert.match(notes[lib.PATHS.area], /\[!areas\]/);
   assert.match(notes[lib.PATHS.area], /\[!projects\]/);
   assert.match(notes[lib.PATHS.area], /\[!notebooks\]/);

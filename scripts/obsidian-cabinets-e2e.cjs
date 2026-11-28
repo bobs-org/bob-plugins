@@ -681,24 +681,28 @@ async function findInEditor(client, query) {
   await sleep(250);
   const focused = await client.evaluate(`(() => {
     const inputs = Array.from(document.querySelectorAll("input"));
-    const input = document.querySelector(".document-search-container input, .cm-textfield")
+    const input = document.querySelector(".document-search-container input, .cm-panel.cm-search input, .cm-textfield")
       || inputs.find((node) => /search|find/i.test((node.placeholder || "") + " " + (node.className || "") + " " + (node.getAttribute("aria-label") || "")));
     if (!input) return { ok: false, inputs: inputs.slice(0, 8).map((node) => ({
       placeholder: node.placeholder, className: String(node.className || ""), aria: node.getAttribute("aria-label"),
     })) };
     input.focus();
     if (typeof input.select === "function") input.select();
+    input.value = ${JSON.stringify(query)};
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
     return { ok: true, className: String(input.className || "") };
   })()`);
   if (focused?.ok) {
-    await client.call("Input.insertText", { text: query });
-    await sleep(80);
-    await client.call("Input.dispatchKeyEvent", {
-      type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-    });
-    await client.call("Input.dispatchKeyEvent", {
-      type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-    });
+    await sleep(120);
+    const jumped = await client.evaluate(`(() => {
+      try { if (app.commands.executeCommandById("editor:find-next")) return "find-next"; } catch (_) {}
+      const next = Array.from(document.querySelectorAll(".document-search-container .clickable-icon, .cm-panel.cm-search button, .cm-panel.cm-search .clickable-icon"))
+        .find((node) => /next/i.test(String(node.getAttribute("aria-label") || node.title || node.textContent || "")));
+      if (next) { next.click(); return "button"; }
+      return null;
+    })()`);
+    focused.jumped = jumped;
     await sleep(280);
   }
   return { opened, focused };
@@ -728,33 +732,34 @@ async function placeEditorOnNeedle(client, needle) {
   })()`);
 }
 
-async function openOutlinePane(client) {
+async function openOutlinePane(client, expectedHeading) {
   await client.evaluate(`(() => { app.workspace.rightSplit?.expand?.(); return true; })()`);
-  return client.evaluate(`(async () => {
+  return settleEvaluate(client, `(async () => {
+    const markdownLeaf = (app.workspace.getLeavesOfType("markdown") || []).find((leaf) => leaf?.view?.file);
+    if (markdownLeaf) app.workspace.setActiveLeaf(markdownLeaf, { focus: true });
     const ran = app.commands.executeCommandById("outline:open");
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await new Promise((resolve) => setTimeout(resolve, 350));
     const items = Array.from(document.querySelectorAll('.workspace-leaf-content[data-type="outline"] .tree-item-self'))
       .map((node) => String(node.textContent || "").trim());
     return { ran, items };
-  })()`);
+  })()`, (value) => Boolean(value?.ran)
+    && (!expectedHeading || (value.items || []).includes(expectedHeading)), 8_000);
 }
 
 async function clickOutlineHeading(client, label) {
-  const point = await settleEvaluate(client, `(() => {
-    const node = Array.from(document.querySelectorAll('.workspace-leaf-content[data-type="outline"] .tree-item-self, .workspace-leaf-content[data-type="outline"] .tree-item-inner'))
+  const clicked = await settleEvaluate(client, `(() => {
+    const node = Array.from(document.querySelectorAll('.workspace-leaf-content[data-type="outline"] .tree-item-inner, .workspace-leaf-content[data-type="outline"] .tree-item-self'))
       .find((item) => String(item.textContent || "").trim() === ${JSON.stringify(label)});
     if (!node) return null;
     node.scrollIntoView({ block: "nearest" });
     const rect = node.getBoundingClientRect();
+    node.click();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height,
       text: String(node.textContent || "").trim() };
   })()`, (value) => Boolean(value && value.width > 0), 5_000);
-  if (!point) throw new Error("Outline has no " + label + " item");
-  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
-  await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
-  await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  if (!clicked) throw new Error("Outline has no " + label + " item");
   await sleep(350);
-  return point;
+  return clicked;
 }
 
 async function closeOutlinePane(client) {
@@ -1463,6 +1468,8 @@ async function run(args) {
 
     // Find a unique token strictly inside the absorbed Projects range, then leave it.
     await openAndProbe(client, lib.PATHS.area, "live");
+    await settleProbe(client, (value) => value?.path === lib.PATHS.area && value?.mode === "live" && value?.cardPresent,
+      "cash live card before Find", 10_000);
     const findErrorsBefore = report.consoleErrors.length;
     const findOpened = await findInEditor(client, FIND_INSIDE_SENTINEL);
     const findInside = await settleEvaluate(client, absorbFindProbeSource(), (value) =>
@@ -1480,8 +1487,10 @@ async function run(args) {
 
     const outlineReveal = async (notePath, heading, kind, mode) => {
       await openAndProbe(client, notePath, mode);
+      await settleProbe(client, (value) => value?.path === notePath && value?.mode === mode && value?.cardPresent,
+        `${notePath} ${mode} card before outline`, 10_000);
       await resetPanels(client);
-      const opened = await openOutlinePane(client);
+      const opened = await openOutlinePane(client, heading);
       const click = opened?.items?.includes(heading) ? await clickOutlineHeading(client, heading) : null;
       probe = await settleProbe(client, (value) => value?.path === notePath
         && value?.panels?.find((row) => row.kind === kind)?.expanded === true,
@@ -1501,6 +1510,9 @@ async function run(args) {
       { outlineProjectsReading, outlineProjectsLive, outlineRecordsReading, outlineRecordsLive });
 
     await openAndProbe(client, lib.PATHS.album, "reading");
+    await settleProbe(client, (value) => value?.path === lib.PATHS.album && value?.mode === "reading"
+      && value?.cardPresent && value?.panels?.some((row) => row.kind === "records"),
+      "eat reading card before Records link", 10_000);
     await resetPanels(client);
     const recordsTarget = await client.evaluate(`(() => {
       const view = app.workspace.activeLeaf?.view;

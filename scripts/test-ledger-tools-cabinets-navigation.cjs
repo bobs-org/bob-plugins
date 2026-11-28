@@ -183,6 +183,17 @@ test("a same-note #Projects link and an Outline Projects item reveal the host ca
   assert.equal(H.propertyCardCabinetHostRevealNavigation(plugin, outlineEvent), true);
   assert.equal(outlineEvent.defaultPrevented, true);
   assert.equal(toggle.clicked, 1);
+
+  toggle.attrs["aria-expanded"] = "false";
+  toggle.clicked = 0;
+  head.scrolled = false;
+  const paneInner = el("div", { class: "tree-item-inner" }, "Projects");
+  const paneSelf = el("div", { class: "tree-item-self" }).append(paneInner);
+  el("div", { class: "workspace-leaf-content", "data-type": "outline" }).append(paneSelf);
+  const paneEvent = clickEvent(paneInner);
+  assert.equal(H.propertyCardCabinetHostRevealNavigation(plugin, paneEvent), true);
+  assert.equal(paneEvent.defaultPrevented, true);
+  assert.equal(toggle.clicked, 1);
 });
 
 test("#Records, eat#Records, and an Outline Records item call the Records reveal", () => {
@@ -221,6 +232,15 @@ test("#Records, eat#Records, and an Outline Records item call the Records reveal
   const outlineEvent = clickEvent(outline.children[0]);
   assert.equal(H.propertyCardCabinetHostRevealNavigation(plugin, outlineEvent), true);
   assert.equal(outlineEvent.defaultPrevented, true);
+  assert.deepEqual(revealed, ["records"]);
+
+  revealed.length = 0;
+  const paneInner = el("div", { class: "tree-item-inner" }, "Records");
+  const paneSelf = el("div", { class: "tree-item-self" }).append(paneInner);
+  el("div", { class: "workspace-leaf-content", "data-type": "outline" }).append(paneSelf);
+  const paneEvent = clickEvent(paneInner);
+  assert.equal(H.propertyCardCabinetHostRevealNavigation(plugin, paneEvent), true);
+  assert.equal(paneEvent.defaultPrevented, true);
   assert.deepEqual(revealed, ["records"]);
   release();
 });

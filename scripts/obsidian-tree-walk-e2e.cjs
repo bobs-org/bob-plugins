@@ -626,12 +626,28 @@ async function runE2e(args) {
     ].join("\n"));
     await client.evaluate([
       "(async () => { const target = app.vault.getAbstractFileByPath('prose/authored_next.md');",
-      "await app.vault.delete(target); window.__treeWalkStaleLink?.click(); })()",
+      "await app.vault.delete(target); })()",
     ].join("\n"));
+    // Vault deletion and metadata-cache link resolution settle asynchronously.
+    // Keep the original painted arm, but wait until the runtime resolver sees
+    // its changed state before clicking it so this tests stale-stop revalidation
+    // instead of racing Obsidian's file-delete event.
+    const deletedStop = await harness.waitFor(client, [
+      "(async () => { const path = 'prose/authored.md';",
+      "const source = app.vault.getAbstractFileByPath(path);",
+      "const content = source ? await app.vault.cachedRead(source) : '';",
+      "const walk = app.plugins.plugins[" + JSON.stringify(NAV) + "].api.walkMode;",
+      "const answer = source ? walk.links({ path, content }) : null;",
+      "return { targetExists: Boolean(app.vault.getAbstractFileByPath('prose/authored_next.md')),",
+      "next: answer?.next || null }; })()",
+    ].join("\n"),
+    (value) => value && !value.targetExists && value.next && value.next.state !== "exists",
+    "deleted stop resolver update");
+    await client.evaluate("window.__treeWalkStaleLink?.click()");
     const notices = await harness.waitFor(client, "window.__treeWalkNotices || []",
       (items) => items.some((item) => /The stop changed/i.test(item)), "stop changed notice");
     check("deleted stop between paint and click shows The stop changed",
-      notices.some((item) => /The stop changed/i.test(item)), notices);
+      notices.some((item) => /The stop changed/i.test(item)), { deletedStop, notices });
     await client.evaluate("window.__treeWalkNoticeObserver?.disconnect()");
 
     const pageErrors = await client.evaluate("window.__treeWalkErrors || []");

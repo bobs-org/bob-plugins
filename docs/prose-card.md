@@ -20,7 +20,10 @@ bob in one undoable edit; the chip is inert only when Bob Prose is absent,
 disabled, or older. It reads local `section_numbers`: an absent key or
 `true` is numbered, `false` is unnumbered, and other values show a warning.
 The foot carries the
-authored `created` stamp and the Properties cabinet.
+authored `created` stamp and the Properties cabinet. When the prose note has
+siblings or other occupied prose parents, a
+[link-walk](bob-navigation-hotkeys.md#link-walk) rail docks as the card's
+floor, below that cabinet.
 
 The measure row comes from Bob Prose's read-only `api.prose` v1 snapshot.
 The card uses Bob's word total, rounds it to the nearest 10 below 1,000 and

@@ -151,8 +151,9 @@ keys declared on the album keep their **legacy** label. `null` renders as
 `—`, empty strings and lists are labelled, and nested maps show a summary
 with the species editor opener, never a YAML dump.
 
-The foot follows the walk rail, outside the collapsible body, so the stamp
-stays visible on identity-only, broken-schema, and collapsed cards. The
+The rail is the card's floor: the last child, below the Properties cabinet,
+so the stamp stays visible on identity-only, broken-schema, and collapsed
+cards. The
 disclosure, `-` in Live Preview Vim normal mode, and **Toggle card
 properties** (palette or Command Mode) toggle the same cabinet; open state is a
 per-note session toggle shared by every pane on the note. `y` on a focused

@@ -454,6 +454,34 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node \
   scripts/obsidian-group-jump-e2e.cjs -r /tmp/group-jump.json -o /tmp/group-jump-shots
 ```
 
+## Tree-note link-walk walkthrough
+
+`scripts/test-obsidian-tree-walk-e2e.cjs` validates the synthetic fixture set,
+the eight keys, and the screenshot inventory without launching Obsidian. That
+offline check is not real acceptance. Run the full walkthrough on athena
+against the current source build:
+
+```bash
+xvfb-run -a node scripts/obsidian-tree-walk-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/tree-walk.json -o /tmp/tree-walk-shots
+```
+
+The runner creates a scratch Git vault and owned Obsidian profile with the
+`pig/foo/bar/baz/goo/alpha/beta/zoo` tree, top-level and nested areas, open
+and closed sibling projects, notebooks nested three deep, two prose notes
+under one parent, malformed parents, the inline-code hazard note, an authored
+nav-line note, and a 64-child project parent. It never opens the live vault
+and puts a refusing `bob` shim first on `PATH`. The run covers all eight
+keys on all four types, rail/footer/key agreement, the card-floor invariant
+on tree, day, and record cards, live reparent/rename/`^prj` updates,
+stale-stop re-validation (`The stop changed — try again`), passivity (zero
+vault writes and zero bob spawns), zero console errors, and Reading
+card-paint perf on the 64-child host. Capture every type in Live Preview and
+Reading, in light and dark, at 420 px, and in forced colors. Inspect every
+PNG and record a visual verdict before calling the bead GO. Retain the
+reports, the review, and the screenshots with `/sase_artifact`.
+
 ## Area and Project card walkthrough
 
 The offline wrapper `scripts/test-obsidian-home-cards-e2e.cjs` is part of `npm test`.

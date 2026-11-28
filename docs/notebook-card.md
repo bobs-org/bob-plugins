@@ -23,7 +23,9 @@ notebooks open like crumbs. Hard errors show a visible pill that jumps to
 the first error line; warnings join the foot lint chip. The kit foot
 carries `created` (silent when missing), the quiet `@stem` capture route
 (click copies), and the Properties cabinet, where zorg importer keys fold
-under Managed.
+under Managed. When the notebook has siblings or other occupied notebook
+parents, a [link-walk](bob-navigation-hotkeys.md#link-walk) rail docks as the
+card's floor, below that cabinet.
 
 ## Keys
 

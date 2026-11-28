@@ -121,8 +121,8 @@ loose keys (legacy chips keep their **legacy** label), then **On this card**
 with those marks, then a folded **Managed** group — with duplicate keys as two
 linted rows.
 
-The foot follows the schema and any rail or mobile hint, including
-identity-only cards that paint before the report arrives. The disclosure,
+The Properties cabinet sits below the schema cabinet and any rail or mobile
+hint, including identity-only cards that paint before the report arrives. The disclosure,
 `-` in Live Preview Vim normal mode, and **Toggle card properties** (palette
 or Command Mode) toggle the same cabinet; open state is a per-note session
 toggle shared by every pane on the note. `y` on a focused cabinet row jumps to

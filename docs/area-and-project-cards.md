@@ -87,6 +87,18 @@ arms the numbered pick. The stored callouts stay in the note and show in
 Source mode and every fail-open context. See
 [Cabinets](cabinets.md) for order, defaults, the pick, and absorption.
 
+## Link-walk rail
+
+When the note has a sibling ring or a parent tour, the card docks a
+[link-walk](bob-navigation-hotkeys.md#link-walk) rail as its floor: the last
+child, below the cabinet stack. `‹ prev · ↑ parent · next ›` steps the ring
+(the `↑` item is absent for a Top-level sentinel). `⏮ parent · ticks · parent ⏭`
+tours occupied parents in outline order; a wrapping arm shows `↺`. A singleton
+with no other parent has no rail — the kicker already names the parent. The
+rail is compass chrome, not a cabinet: it has no `_` number and never sits
+inside a collapsible body. A click re-resolves the walk, then runs the same
+`[n` / `]n` / `[N` / `]N` commands as the keys so jump history agrees.
+
 ## Report-backed live parts
 
 The card subscribes to the already-shared Areas and Projects report services and

@@ -273,7 +273,9 @@ never filter. Nav `api.walkMode` v5 receives red attention for any over-limit
 lane. Ledger sends [`s`/`w`/`b` attention](https://bobs-org.github.io/walks/),
 also mirrored by Mac Capture. The `n` compass (`walkMode.links()` v7) paints
 outer skip-mark group arms (dashed `+`, dotted ghost), context, and `]}`/`]n`
-hints; it sheds end-first. The `b` panel shows `api.bankWalk` v1 snapshot scope
+hints; it sheds end-first. On tree notes the arms name parents, context
+includes the project lane, and wrap/singleton copy uses the tree reasons.
+The matching rail docks as the card's floor, below every cabinet. The `b` panel shows `api.bankWalk` v1 snapshot scope
 (`WAITING` amber while any row waits, otherwise calm `ALL`), planner day arms
 (`[B` / `]B`), money only for the cursor row, and an account meter: `✓ balanced`
 only when cached `bob bank list` says every account is balanced, otherwise the

@@ -107,7 +107,7 @@ now Notice, with the destination-name segment omitted.
 | `bank` | 2 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment and Category card actions. |
 | `bankWalk` | 1 | Serve the read-only bank-row walk snapshot, the shared step/day planners, cursor locate, live-buffer identity resolution, the session anchor, and the Category-card busy flag behind `]b` / `[b` and `]B` / `[B`. |
 | `periodNotes` | 2 | Open or create a canonical period note through `bob periods ensure`; v2 refuses pre-adoption past targets unless `allowPreAdoption`. |
-| `navGroups` | 1 | Resolve derived calendar group and step stops for `[N` / `]N` and legacy `[n` / `]n` fill-in. Records return `route: null` until record-groups. |
+| `navGroups` | 1 | Resolve derived group and step stops for `[N` / `]N` and `[n` / `]n`. Dispatch is record, then tree, then calendar. `lane` and `stepNone` are additive and null on existing routes. |
 
 ### `taskSettle` v1
 
@@ -195,11 +195,20 @@ and jumps can never disagree. The top-level ledger api version is unchanged.
 
 `periodNotes` v2 adds a `pre-adoption` refusal on past targets whose ISO
 week-year has no week note (`allowPreAdoption` bypasses it). `navGroups` v1
-`resolve({ path, content })` is synchronous and never throws: calendar notes
-get derived step and group stops (`exists` / `creatable` / `ghost`;
-pre-adoption past targets are ghosts; missing dailies in adopted years and
-the future are creatable), year and `all_time` set `none`, and every other
-path returns `route: null` until record-groups. The adopted-year cache
+`resolve({ path, content, lazy? })` is synchronous and never throws. Dispatch
+is record, then tree, then calendar. Calendar notes get derived step and
+group stops (`exists` / `creatable` / `ghost`; pre-adoption past targets are
+ghosts; missing dailies in adopted years and the future are creatable), and
+year and `all_time` set `none`. Tree notes (`route: "tree"`, kind
+`area`/`project`/`notebook`/`prose`) return sibling-ring step stops and
+parent-tour group stops; `lane` is `"open"`/`"closed"` for projects and
+otherwise null; `stepNone` carries the no-sibling reason. Tree group stops
+carry `shortLabel` as the parent label, matching calendar and record group
+stops. `lazy: true` is for paint callers: a cold tree index answers
+`none: { reason: "indexing" }` and builds nothing; without `lazy`, a cold
+index is built synchronously once. Existing calendar and record answers stay
+byte-identical except for the two null fields `navGroupsOk` gains (`lane`,
+`stepNone`). The namespace stays version 1. The adopted-year cache
 invalidates on week-note create, delete, and rename.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
@@ -466,8 +475,13 @@ Navigation methods settle to result objects or `null`, not rejected promises.
 `continue(origin, outcome)` resolves the advance result, with v2 parking then
 landing on `outcome.follow`. The additive `walkMode` namespace persists the
 selected family and attention: v4 adds bank walk, v5 lane walk, and v6 paints
-selected-family attention as letter ink and other attention as a dot. Feature-
-detect the required `walkMode.version` before using each family.
+selected-family attention as letter ink and other attention as a dot. v7
+`links({path, content})` stays v7: it already returns `prevGroup`,
+`nextGroup`, `group`, `groupNone`, and `groupConflict`, plus `source`,
+`state`, and `ghostReason` on step stops, and additively returns `route`,
+`kind`, `lane`, `parent` (the provider's `step.parent`), and `stepNone`,
+each null when absent. Feature-detect the required `walkMode.version`
+before using each family.
 
 ## Task Status Cycler
 

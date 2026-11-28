@@ -546,6 +546,32 @@ rail, day and amount, month and hint (`Ctrl+Enter file` waiting, `]} next day`
 in ALL). Never writes or runs `bob`; no-ops with the Category card open.
 (Vim's `[b` is `:bprevious`; here it walks bank rows.)
 
+## Link walk
+
+`]n` / `[n` step to the neighbouring note; `]N` / `[N` jump to the first
+note of the neighbouring group. One resolver answers the keys, the
+repeats, the walker-footer links panel, and the card rail. Authored
+nav-line links win (`‹`/`›` or `prev`/`next` for steps, `«`/`»` for
+groups); otherwise Ledger Tools derives the stop and writes nothing.
+
+Daily notes and periods walk the calendar. Records walk the album ring
+(`walk_by` groups when set). Area, project, notebook, and prose notes
+(including legacy `[[article]]`) walk **tree** rings: same-type siblings
+under one resolved `parent`, wrapping, in catalog order, with open and
+closed projects in separate lanes (`^prj` `x`/`X`/`-` is closed). `]N`
+tours occupied parents in outline order (each parent before its
+children, children in cabinet order). `done/`, `_templates/`,
+`_conflicts/`, `area.md`, `project.md`, and `bank.md` never walk. A
+sentinel `[[area]]` / `[[project]]` is **Top level**, never a member or
+`↑` target. Derived tree stops open only existing notes.
+
+A link inside inline code never matches a step. Doubled arrows never
+step. Tree steps count only on a nav line; calendar and record still
+match steps in the body. Distinct «/» destinations refuse. Empty
+rings and tours show the tree reason (`bar has no parent — Ctrl+Shift+-
+sets one`; `foo holds every open project — ]n walks them`). The rail is
+the card's floor, below every cabinet.
+
 ## Bracket repeat
 
 `]]` repeats the last bracket-walk family forward, and `[[` repeats it
@@ -579,23 +605,11 @@ way the last walk moved, and neither key changes the remembered family.
 `N]}` / `N[{` keep count parity with `N]S` / `N[S`, `N]W` / `N[W`, and `N]B` / `N[B`. With no
 type, both show the empty notice. Family `n` ignores counts, including `N]N`.
 
-`]n` / `[n` open the first body link outside frontmatter and code fences labelled
-`next` / `prev`, or carrying a single arrow: previous starts with `‹` / `<`;
-next starts or ends with `›` / `>`. Doubled arrows never step.
-
-`[N` / `]N` open the previous / next group head. On a link-only body line,
-`« X` / `<< X` names the previous group; `X »`, `» X`, `X >>`, or `>> X` names
-the next. Whitespace and `· • | / , – — -` separate links. Prose and code do
-not qualify. Distinct destinations in one role refuse with “Two « links on nav
-lines — keep one” (or »); identical destinations deduplicate.
-
-Authored links win per role; Ledger Tools `api.navGroups` supplies the remaining
-group and step stops, including legacy daily notes without a nav line. Missing
-periods use `api.periodNotes.ensureNote`, never Templater; missing daily notes
-use their daily template. Pre-adoption ghosts never create; missing album records
-remain syncing. An explicit group key can create an eligible note; `]}` / `[{`
-only open existing notes and tell you which explicit key can create the target.
-Without Ledger Tools, authored navigation still works.
+See [Link walk](#link-walk) for tree rings and matcher. Missing periods
+use `api.periodNotes.ensureNote`; missing dailies use their template.
+Pre-adoption ghosts never create; missing album records remain syncing.
+`]}` / `[{` only open existing notes. Without Ledger Tools, authored
+navigation still works.
 
 The family persists per device and vault. Before selection, repeats show
 `Nothing to repeat yet — press ]s, ]w, ]n, or ]b first`. Repeats add no toast.
@@ -620,11 +634,8 @@ Clicking a letter persists that family per device and keeps editor focus.
 It runs no walk, shows no notice, and writes no notes; the next `]]` uses
 the chosen family.
 
-The persisted family is published via nav `api.walkMode` v7: v1 `current()`/`select(type)`; v2 `links({path, content})`; v3
-display-only `setAttention(type, value)`; v4 per-family attention; v5 lane
-attention. V7 adds `prevGroup`, `nextGroup`, `group`, `groupNone`, and
-`groupConflict` to `links`, plus `source`, `state`, and `ghostReason` on step
-stops; v2 consumers retain `prev`/`next` and `exists`. `s` stays on iff `]s` has a row, including ROTTEN and POST; its hue
+The persisted family is published via nav `api.walkMode` v7 (see the
+[API](https://bobs-org.github.io/develop/plugins/plugin-apis/)). `s` stays on iff `]s` has a row, including ROTTEN and POST; its hue
 is the first due group (PRE/POST cyan, ROTTEN orange). Changes and setup fire
 the doorbell; receivers re-read `current()`. Dots clear on selection or when
 no rows wait (counts in tooltips; `Highlight` when forced).
